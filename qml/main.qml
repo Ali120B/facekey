@@ -86,6 +86,43 @@ ApplicationWindow {
         }
     }
 
+    // Non-visual camera helpers. NOTE: these must NOT live inside a UiCard:
+    // its default property is list<Item> and rejects QObject children
+    // ("Cannot assign object to list property").
+    MediaDevices { id: mgrCams }
+    Component {
+        id: previewComponent
+        Rectangle {
+            anchors.fill: parent
+            radius: 10
+            color: "#0B0C0F"
+            border.width: 1
+            border.color: line
+            clip: true
+
+            Camera {
+                id: pvCam
+                active: true
+                cameraDevice: {
+                    if (mgrCams.videoInputs.length === 0) return null
+                    var path = (previewCombo.currentIndex >= 0 && previewCombo.currentIndex < backend.camera_paths.length)
+                        ? backend.camera_paths[previewCombo.currentIndex] : ""
+                    return mgrCams.videoInputs[qtCamIndex(mgrCams.videoInputs, path)]
+                }
+                onErrorOccurred: (error, errorString) => { window.camError = errorString }
+            }
+            CaptureSession {
+                camera: pvCam
+                videoOutput: pvOut
+            }
+            VideoOutput {
+                id: pvOut
+                anchors.fill: parent
+                fillMode: VideoOutput.PreserveAspectFit
+            }
+        }
+    }
+
     Timer {
         id: refreshTimer
         interval: 400
@@ -577,8 +614,6 @@ ApplicationWindow {
                 }
             }
 
-            MediaDevices { id: mgrCams }
-
             // Loader (not just active=false): destroying the Camera object
             // is what actually releases /dev/videoN. Merely deactivating
             // leaves the node busy, breaking switches and enrollment.
@@ -589,38 +624,6 @@ ApplicationWindow {
                 visible: previewOn
                 active: previewOn && !camRestart
                 sourceComponent: previewComponent
-            }
-            Component {
-                id: previewComponent
-                Rectangle {
-                    anchors.fill: parent
-                    radius: 10
-                    color: "#0B0C0F"
-                    border.width: 1
-                    border.color: line
-                    clip: true
-
-                    Camera {
-                        id: pvCam
-                        active: true
-                        cameraDevice: {
-                            if (mgrCams.videoInputs.length === 0) return null
-                            var path = (previewCombo.currentIndex >= 0 && previewCombo.currentIndex < backend.camera_paths.length)
-                                ? backend.camera_paths[previewCombo.currentIndex] : ""
-                            return mgrCams.videoInputs[qtCamIndex(mgrCams.videoInputs, path)]
-                        }
-                        onErrorOccurred: (error, errorString) => { window.camError = errorString }
-                    }
-                    CaptureSession {
-                        camera: pvCam
-                        videoOutput: pvOut
-                    }
-                    VideoOutput {
-                        id: pvOut
-                        anchors.fill: parent
-                        fillMode: VideoOutput.PreserveAspectFit
-                    }
-                }
             }
 
             RowLayout {
