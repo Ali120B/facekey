@@ -6,6 +6,24 @@ Created and maintained by **[Ali120B](https://github.com/Ali120B)** — contact:
 
 ![Ultimate Howdy GUI](assets/screenshot.png)
 
+## Installation
+
+Grab the AppImage from the [**latest release**](https://github.com/Ali120B/ultimate-howdy-gui/releases/latest), make it executable, and run it:
+
+```bash
+chmod +x ultimate-howdy-gui-*-x86_64.AppImage
+./ultimate-howdy-gui-*-x86_64.AppImage
+```
+
+You still need Howdy itself plus a few system packages on the machine:
+
+```bash
+sudo pacman -S howdy v4l-utils mpv polkit
+yay -S pam-python   # AUR, required for login/sudo/polkit face auth
+```
+
+Prefer building from source? See [Testing The App](#testing-the-app).
+
 ## Hardware Requirements
 
 - **IR Camera**: A Windows Hello compatible infrared camera is required. Found in:
