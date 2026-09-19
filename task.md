@@ -10,17 +10,17 @@ backend trait so Ubuntu can plug in later.
 - [x] Rebuild + smoke test + push
 
 ## Phase 1 — Backend detection + install API (bridge.rs)
-- [ ] Preflight properties: howdy, pam_python, dlib models, toolchain
+- [x] Preflight properties: howdy, pam_python, dlib models, toolchain
       (gcc/make/pkgconf/fakeroot), AUR helper (yay/paru), polkit agent,
       IR camera
-- [ ] `run_preflight()` populating the above
-- [ ] `probe_cameras()` — per-/dev/videoN format summary via v4l2-ctl,
+- [x] `run_preflight()` populating the above
+- [x] `probe_cameras()` — per-/dev/videoN format summary via v4l2-ctl,
       square-lowres IR heuristic, `suggested_camera`
-- [ ] Repo-package install via pkexec pacman, streamed to
+- [x] Repo-package install via pkexec pacman, streamed to
       /tmp/facekey_install.log (`start_repo_install`, `poll_install_log`)
-- [ ] AUR handoff: open user terminal running yay (foot/kitty/konsole/
+- [x] AUR handoff: open user terminal running yay (foot/kitty/konsole/
       gnome-terminal/xterm), `check_install_done()` polling
-- [ ] Build + offscreen smoke + qmllint + push
+- [x] Build + offscreen smoke + push
 
 ## Phase 2 — QML wizard screens
 - [ ] Welcome → Preflight → Install (log view) → Camera (QtMultimedia

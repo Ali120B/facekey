@@ -28,6 +28,21 @@ pub mod qobject {
         #[qproperty(bool, plasma_lm_installed)]
         #[qproperty(bool, hyprlock_installed)]
         #[qproperty(QString, app_version)]
+        // ── Setup wizard / Doctor state ──
+        #[qproperty(bool, setup_howdy)]
+        #[qproperty(bool, setup_pam_python)]
+        #[qproperty(bool, setup_models)]
+        #[qproperty(bool, setup_toolchain)]
+        #[qproperty(QString, setup_aur_helper)]
+        #[qproperty(bool, setup_agent)]
+        #[qproperty(bool, setup_ir_camera)]
+        #[qproperty(QList_QString, camera_candidates)]
+        #[qproperty(QList_QString, camera_paths)]
+        #[qproperty(QString, suggested_camera)]
+        #[qproperty(QString, install_log)]
+        #[qproperty(bool, install_running)]
+        #[qproperty(bool, install_done)]
+        #[qproperty(QString, install_error)]
         type HowdyBackend = super::HowdyBackendRust;
 
         /// Check if device has supported IR camera
@@ -85,6 +100,35 @@ pub mod qobject {
         /// Detect which display managers (SDDM / plasma-login-manager) are installed
         #[qinvokable]
         fn detect_display_managers(self: Pin<&mut HowdyBackend>);
+
+        /// Run all setup preflight checks (howdy, pam-python, models,
+        /// toolchain, AUR helper, polkit agent, IR camera)
+        #[qinvokable]
+        fn run_preflight(self: Pin<&mut HowdyBackend>);
+
+        /// Probe /dev/video* devices: format summaries, IR heuristic,
+        /// suggested_camera. Populates camera_candidates/camera_paths.
+        #[qinvokable]
+        fn probe_cameras(self: Pin<&mut HowdyBackend>);
+
+        /// Install repo packages via pkexec pacman in a thread, streaming
+        /// to /tmp/facekey_install.log
+        #[qinvokable]
+        fn start_repo_install(self: Pin<&mut HowdyBackend>);
+
+        /// Append new install log output to install_log; returns true when
+        /// the background install finished (check install_done/install_error)
+        #[qinvokable]
+        fn poll_install_log(self: Pin<&mut HowdyBackend>) -> bool;
+
+        /// Open a user terminal running the AUR install (yay refuses root,
+        /// so this runs unelevated and yay asks for sudo itself)
+        #[qinvokable]
+        fn launch_aur_install(self: Pin<&mut HowdyBackend>);
+
+        /// True when howdy + pam-python are both present
+        #[qinvokable]
+        fn check_install_done(self: Pin<&mut HowdyBackend>) -> bool;
     }
 }
 
@@ -113,6 +157,21 @@ pub struct HowdyBackendRust {
     plasma_lm_installed: bool,
     hyprlock_installed: bool,
     app_version: QString,
+    // ── Setup wizard / Doctor state ──
+    setup_howdy: bool,
+    setup_pam_python: bool,
+    setup_models: bool,
+    setup_toolchain: bool,
+    setup_aur_helper: QString,
+    setup_agent: bool,
+    setup_ir_camera: bool,
+    camera_candidates: QList<QString>,
+    camera_paths: QList<QString>,
+    suggested_camera: QString,
+    install_log: QString,
+    install_running: bool,
+    install_done: bool,
+    install_error: QString,
 }
 
 const PAM_LINE_DEBIAN: &str = "auth sufficient pam_howdy.so";
@@ -250,6 +309,131 @@ fn pacman_installed(pkg: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+// ── Setup wizard helpers (Arch backend; see task.md install plan) ──
+
+/// Repo packages FaceKey needs from pacman
+const REPO_PACKAGES: &[&str] = &[
+    "qt6-base",
+    "qt6-declarative",
+    "qt6-multimedia",
+    "v4l-utils",
+    "mpv",
+    "polkit",
+    "gcc",
+    "make",
+    "pkgconf",
+    "fakeroot",
+];
+
+/// dlib model files that must ship inside the howdy package
+const DLIB_MODELS: &[&str] = &[
+    "shape_predictor_5_face_landmarks.dat",
+    "dlib_face_recognition_resnet_model_v1.dat",
+    "mmod_human_face_detector.dat",
+];
+
+/// First available program in PATH, or None
+fn which_first(candidates: &[&str]) -> Option<String> {
+    for prog in candidates {
+        if let Ok(out) = Command::new("which").arg(prog).output() {
+            if out.status.success() {
+                if let Ok(s) = String::from_utf8(out.stdout) {
+                    let s = s.trim().to_string();
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pam_python_present() -> bool {
+    Path::new("/usr/lib/security/pam_python.so").exists()
+        || Path::new("/lib/security/pam_python.so").exists()
+}
+
+fn dlib_models_present() -> bool {
+    DLIB_MODELS.iter().all(|f| {
+        Path::new(&format!("/usr/lib/security/howdy/dlib-data/{}", f)).exists()
+    })
+}
+
+fn polkit_agent_running() -> bool {
+    Command::new("pgrep")
+        .args([
+            "-f",
+            "hyprpolkitagent|polkit-gnome-authentication-agent|polkit-kde-authentication-agent|polkit-mate-authentication-agent|lxpolkit",
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Sorted /dev/video* nodes
+fn list_video_devices() -> Vec<String> {
+    let mut device_list: Vec<String> = fs::read_dir("/dev")
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with("video") {
+                Some(format!("/dev/{}", name))
+            } else {
+                None
+            }
+        })
+        .collect();
+    device_list.sort();
+    device_list
+}
+
+/// Parsed capability summary for one /dev/videoN node
+struct CameraProbe {
+    path: String,
+    summary: String,
+    likely_ir: bool,
+}
+
+fn probe_video_device(path: &str) -> CameraProbe {
+    let mut sizes: Vec<(u32, u32)> = Vec::new();
+    if let Ok(out) = Command::new("v4l2-ctl")
+        .args(["-d", path, "--list-formats-ext"])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let t = line.trim();
+                if let Some(rest) = t.strip_prefix("Size: Discrete ") {
+                    let mut it = rest.split('x');
+                    if let (Some(w), Some(h)) = (it.next(), it.next()) {
+                        if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
+                            sizes.push((w, h));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    sizes.sort_by_key(|(w, h)| w.saturating_mul(*h));
+    // IR sensors typically expose a small square frame (e.g. 340x340)
+    let likely_ir = sizes
+        .iter()
+        .any(|(w, h)| w == h && *w <= 480 && *w >= 100);
+    let summary = sizes
+        .last()
+        .map(|(w, h)| format!("{}x{}", w, h))
+        .unwrap_or_else(|| "no capture formats".to_string());
+    CameraProbe {
+        path: path.to_string(),
+        summary,
+        likely_ir,
+    }
 }
 
 impl qobject::HowdyBackend {
@@ -681,20 +865,7 @@ impl qobject::HowdyBackend {
 
     /// Scan /dev/ for video* devices and check if howdy's device_path is already configured
     pub fn load_video_devices(mut self: Pin<&mut Self>) {
-        let mut device_list: Vec<String> = fs::read_dir("/dev")
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok())
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                if name.starts_with("video") {
-                    Some(format!("/dev/{}", name))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        device_list.sort();
+        let device_list: Vec<String> = list_video_devices();
 
         let mut devices = QList::<QString>::default();
         for d in &device_list {
@@ -1120,5 +1291,187 @@ impl qobject::HowdyBackend {
                     .set_status_message(QString::from(&format!("Error: {}", e)));
             }
         }
+    }
+
+    // ── Setup wizard / Doctor ──
+
+    /// Run all setup preflight checks
+    pub fn run_preflight(mut self: Pin<&mut Self>) {
+        self.as_mut().set_setup_howdy(find_howdy().is_some());
+        self.as_mut()
+            .set_setup_pam_python(pam_python_present());
+        self.as_mut()
+            .set_setup_models(dlib_models_present());
+        self.as_mut().set_setup_toolchain(
+            ["gcc", "make", "pkgconf", "fakeroot"]
+                .iter()
+                .all(|p| which_first(&[*p]).is_some()),
+        );
+        let helper = which_first(&["yay", "paru"]).unwrap_or_default();
+        self.as_mut()
+            .set_setup_aur_helper(QString::from(&helper));
+        self.as_mut()
+            .set_setup_agent(polkit_agent_running());
+        let mut ir = false;
+        for d in list_video_devices() {
+            if probe_video_device(&d).likely_ir {
+                ir = true;
+                break;
+            }
+        }
+        self.as_mut().set_setup_ir_camera(ir);
+    }
+
+    /// Probe cameras with format summaries + IR heuristic
+    pub fn probe_cameras(mut self: Pin<&mut Self>) {
+        let devices = list_video_devices();
+        let mut candidates = QList::<QString>::default();
+        let mut paths = QList::<QString>::default();
+        let mut suggested = String::new();
+        let mut first_usable = String::new();
+        for d in &devices {
+            let probe = probe_video_device(d);
+            if first_usable.is_empty() && probe.summary != "no capture formats" {
+                first_usable = d.clone();
+            }
+            if suggested.is_empty() && probe.likely_ir {
+                suggested = d.clone();
+            }
+            let display = if probe.likely_ir {
+                format!("{} — {} · likely IR", d, probe.summary)
+            } else {
+                format!("{} — {}", d, probe.summary)
+            };
+            candidates.append_clone(&QString::from(display.as_str()));
+            paths.append_clone(&QString::from(d.as_str()));
+        }
+        if suggested.is_empty() {
+            suggested = first_usable;
+        }
+        self.as_mut().set_camera_candidates(candidates);
+        self.as_mut().set_camera_paths(paths);
+        self.as_mut()
+            .set_suggested_camera(QString::from(&suggested));
+        self.as_mut().set_setup_ir_camera(!suggested.is_empty());
+    }
+
+    /// Install repo packages via pkexec pacman in a thread
+    pub fn start_repo_install(mut self: Pin<&mut Self>) {
+        self.as_mut().set_install_running(true);
+        self.as_mut().set_install_done(false);
+        self.as_mut()
+            .set_install_error(QString::from(""));
+        self.as_mut().set_install_log(QString::from(
+            "Installing system packages — authenticate in the popup…\n",
+        ));
+        std::thread::spawn(move || {
+            let _ = fs::write(
+                "/tmp/facekey_install.log",
+                "FaceKey system-package install\n",
+            );
+            let pkgs = REPO_PACKAGES.join(" ");
+            let script = format!(
+                "pacman -S --needed --noconfirm {} >> /tmp/facekey_install.log 2>&1; code=$?; chmod 644 /tmp/facekey_install.log; echo $code > /tmp/facekey_install_done; exit $code",
+                pkgs
+            );
+            let _ = Command::new("pkexec")
+                .args(["/usr/bin/bash", "-c", &script])
+                .output();
+        });
+    }
+
+    /// Stream install log; true when the background install finished
+    pub fn poll_install_log(mut self: Pin<&mut Self>) -> bool {
+        if let Ok(content) = fs::read_to_string("/tmp/facekey_install.log") {
+            let lines: Vec<&str> = content.lines().collect();
+            let tail = if lines.len() > 80 {
+                &lines[lines.len() - 80..]
+            } else {
+                &lines[..]
+            };
+            self.as_mut()
+                .set_install_log(QString::from(&tail.join("\n")));
+        }
+        if let Ok(code) = fs::read_to_string("/tmp/facekey_install_done") {
+            let _ = fs::remove_file("/tmp/facekey_install_done");
+            self.as_mut().set_install_running(false);
+            self.as_mut().set_install_done(true);
+            if code.trim() != "0" {
+                self.as_mut().set_install_error(QString::from(
+                    "Package install failed — see log above",
+                ));
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Open a user terminal running the AUR install (yay refuses root,
+    /// so this runs unelevated and yay asks for sudo itself)
+    pub fn launch_aur_install(mut self: Pin<&mut Self>) {
+        let helper = match which_first(&["yay", "paru"]) {
+            Some(h) => h,
+            None => {
+                self.as_mut().set_install_error(QString::from(
+                    "No AUR helper found (install yay or paru first)",
+                ));
+                return;
+            }
+        };
+        let helper_base = helper.rsplit('/').next().unwrap_or(&helper).to_string();
+        let term = match which_first(&[
+            "foot",
+            "kitty",
+            "konsole",
+            "gnome-terminal",
+            "xterm",
+        ]) {
+            Some(t) => t,
+            None => {
+                self.as_mut().set_install_error(QString::from(
+                    "No terminal emulator found",
+                ));
+                return;
+            }
+        };
+        // NOTE: python-dlib compiles from source here — honest 20-60 min
+        // on fresh machines. The terminal stays open so the log is visible.
+        let script = format!(
+            "echo 'FaceKey: installing howdy + pam-python (dlib compile takes a while, leave it running)'; {} -S --needed --noconfirm howdy pam-python; echo; echo '--- FaceKey: close this window when finished, then press Continue ---'; read _",
+            helper_base
+        );
+        let mut cmd = Command::new(&term);
+        let term_base = term.rsplit('/').next().unwrap_or(&term);
+        if term_base == "konsole" || term_base == "xterm" {
+            cmd.args(["-e", "bash", "-c", &script]);
+        } else if term_base == "gnome-terminal" {
+            cmd.args(["--", "bash", "-c", &script]);
+        } else {
+            // foot, kitty: command directly
+            cmd.args(["bash", "-c", &script]);
+        }
+        match cmd.spawn() {
+            Ok(_) => {
+                self.as_mut().set_install_error(QString::from(""));
+            }
+            Err(e) => {
+                self.as_mut().set_install_error(QString::from(&format!(
+                    "Could not open terminal: {}",
+                    e
+                )));
+            }
+        }
+    }
+
+    /// True when howdy + pam-python are both present (refreshes preflight)
+    pub fn check_install_done(mut self: Pin<&mut Self>) -> bool {
+        let done = find_howdy().is_some() && pam_python_present();
+        if done {
+            self.as_mut().set_setup_howdy(true);
+            self.as_mut().set_setup_pam_python(true);
+            self.as_mut()
+                .set_setup_models(dlib_models_present());
+        }
+        done
     }
 }
