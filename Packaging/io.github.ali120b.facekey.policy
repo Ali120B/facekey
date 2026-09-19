@@ -4,9 +4,9 @@
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
   <vendor>Ali120B</vendor>
-  <vendor_url>https://github.com/Ali120B/ultimate-howdy-gui</vendor_url>
+  <vendor_url>https://github.com/Ali120B/facekey</vendor_url>
 
-  <action id="io.github.ali120b.ultimate-howdy-gui.run-howdy">
+  <action id="io.github.ali120b.facekey.run-howdy">
     <description>Manage Howdy face authentication</description>
     <message>Authentication is required to manage Howdy face authentication</message>
     <defaults>

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=FaceKey
+Comment=Face ID for Linux - setup and manager for Howdy face authentication
+Exec=facekey
+Icon=facekey
+Terminal=false
+Type=Application
+Categories=System;Settings;
+Keywords=howdy;face;authentication;camera;faceid;

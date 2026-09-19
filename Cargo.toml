@@ -1,8 +1,8 @@
 [package]
-name = "ultimate-howdy-gui"
+name = "facekey"
 version = "1.9.0"
 edition = "2021"
-description = "Ultimate Howdy GUI - Qt front-end for Howdy face authentication"
+description = "FaceKey - Face ID for Linux. Qt front-end and setup wizard for Howdy face authentication"
 authors = ["Ali120B"]
 
 [dependencies]
@@ -14,5 +14,5 @@ cxx-qt-lib = { version = "0.8.1", features = ["qt_full"] }
 cxx-qt-build = "0.8.1"
 
 [[bin]]
-name = "ultimate-howdy-gui"
+name = "facekey"
 path = "src/main.rs"

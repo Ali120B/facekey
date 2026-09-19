@@ -1,18 +1,18 @@
-# Ultimate Howdy GUI
+# FaceKey — Face ID for Linux
 
-A Qt-based graphical interface for managing [**Howdy**](https://github.com/boltgolt/howdy) face authentication on Linux systems with Windows Hello compatible hardware.
+A Qt-based all-in-one setup wizard and manager for [**Howdy**](https://github.com/boltgolt/howdy) face authentication on Linux.
 
 Created and maintained by **[Ali120B](https://github.com/Ali120B)** — contact: alibashmail2010@yahoo.com
 
-![Ultimate Howdy GUI](assets/screenshot.png)
+![FaceKey](assets/screenshot.png)
 
 ## Installation
 
-Grab the AppImage from the [**latest release**](https://github.com/Ali120B/ultimate-howdy-gui/releases/latest), make it executable, and run it:
+Grab the AppImage from the [**latest release**](https://github.com/Ali120B/facekey/releases/latest), make it executable, and run it:
 
 ```bash
-chmod +x ultimate-howdy-gui-*-x86_64.AppImage
-./ultimate-howdy-gui-*-x86_64.AppImage
+chmod +x facekey-*-x86_64.AppImage
+./facekey-*-x86_64.AppImage
 ```
 
 You still need Howdy itself plus a few system packages on the machine:
@@ -49,8 +49,8 @@ sudo pacman -S rust clang qt6-base qt6-declarative qt6-multimedia howdy v4l-util
 yay -S pam-python
 
 # Clone and run
-git clone https://github.com/Ali120B/ultimate-howdy-gui.git
-cd ultimate-howdy-gui
+git clone https://github.com/Ali120B/facekey.git
+cd facekey
 cargo run
 ```
 

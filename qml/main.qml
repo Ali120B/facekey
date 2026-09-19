@@ -10,7 +10,7 @@ ApplicationWindow {
     height: 940
     minimumWidth: 560
     minimumHeight: 760
-    title: "Ultimate Howdy GUI"
+    title: "FaceKey"
 
     // ── Forced dark theme ───────────────────────────────────────────────────
     palette.window: "#131519"
@@ -394,8 +394,8 @@ ApplicationWindow {
             }
             ColumnLayout {
                 spacing: 0
-                Label { text: "Ultimate Howdy GUI"; font.pixelSize: 20; font.bold: true; color: ink }
-                Label { text: "Face authentication for Linux"; font.pixelSize: 12; color: dim }
+                Label { text: "FaceKey"; font.pixelSize: 20; font.bold: true; color: ink }
+                Label { text: "Face ID for Linux"; font.pixelSize: 12; color: dim }
             }
             Item { Layout.fillWidth: true }
             Label { text: "v" + backend.app_version; font.pixelSize: 12; color: dim }
