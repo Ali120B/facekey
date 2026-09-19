@@ -1,7 +1,7 @@
 # Maintainer: Ali120B <alibashmail2010@yahoo.com>
 
 pkgname=facekey
-pkgver=1.9.0
+pkgver=2.0.0
 pkgrel=1
 pkgdesc="FaceKey - Face ID for Linux. Qt front-end and setup wizard for Howdy face authentication"
 arch=('x86_64')
