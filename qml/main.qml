@@ -43,6 +43,9 @@ ApplicationWindow {
     // for enroll/test, which need exclusive access)
     property bool previewOn: false
     property string camError: ""
+    // Flipped briefly when the device changes: guarantees the Camera
+    // restarts on the new node even if Qt ignores hot-swaps.
+    property bool camHold: true
 
     // Match a /dev path to Qt's camera device list by stable id instead
     // of position: Qt also enumerates metadata nodes, so indices shift.
@@ -576,7 +579,7 @@ ApplicationWindow {
                 MediaDevices { id: mgrCams }
                 Camera {
                     id: mgrCam
-                    active: previewOn && mgrCams.videoInputs.length > 0
+                    active: previewOn && mgrCams.videoInputs.length > 0 && camHold
                     cameraDevice: {
                         if (mgrCams.videoInputs.length === 0) return null
                         var path = (previewCombo.currentIndex >= 0 && previewCombo.currentIndex < backend.camera_paths.length)
@@ -608,6 +611,11 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         model: backend.camera_candidates
                         font.pixelSize: 12
+                        onActivated: {
+                            // Restart the camera on the newly picked node
+                            camHold = false
+                            Qt.callLater(function() { camHold = true })
+                        }
                     }
                     Label {
                         Layout.fillWidth: true
@@ -624,7 +632,9 @@ ApplicationWindow {
                     font.pixelSize: 12
                     enabled: backend.camera_paths.length > 0
                     onClicked: {
-                        window.previewOn = false
+                        // Card stays open on purpose: the live feed proves
+                        // the switch, and the status line reports save errors
+                        // (a cancelled password used to look like success).
                         backend.save_device_path(backend.camera_paths[previewCombo.currentIndex])
                         backend.check_device()
                         backend.refresh_models()

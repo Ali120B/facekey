@@ -31,6 +31,9 @@ Rectangle {
     property string enrollName: ""
     property bool polkitArmed: false
     property string camError: ""
+    // Flipped briefly on device change: forces a clean camera restart
+    // even if Qt ignores hot-swaps on a live camera.
+    property bool camHold: true
 
     // Match a /dev path to Qt's camera device list by stable id instead
     // of position: Qt also enumerates metadata nodes, so indices shift.
@@ -327,7 +330,7 @@ Rectangle {
                     MediaDevices { id: qtCams }
                     Camera {
                         id: qtCam
-                        active: wizard.visible && wizard.step === 3 && qtCams.videoInputs.length > 0
+                        active: wizard.visible && wizard.step === 3 && qtCams.videoInputs.length > 0 && camHold
                         cameraDevice: {
                             if (qtCams.videoInputs.length === 0) return null
                             var path = (camCombo.currentIndex >= 0 && camCombo.currentIndex < backend.camera_paths.length)
@@ -358,6 +361,10 @@ Rectangle {
                     id: camCombo
                     Layout.fillWidth: true
                     model: backend.camera_candidates
+                    onActivated: {
+                        camHold = false
+                        Qt.callLater(function() { camHold = true })
+                    }
                 }
                 Label {
                     Layout.fillWidth: true
