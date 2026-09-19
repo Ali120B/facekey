@@ -24,11 +24,15 @@ fn egl_works() -> bool {
             Err(_) => return false,
         };
         let get_display: Result<
-            libloading::Symbol<unsafe extern "C" fn(*const std::ffi::c_void) -> *mut std::ffi::c_void>,
+            libloading::Symbol<
+                unsafe extern "C" fn(*const std::ffi::c_void) -> *mut std::ffi::c_void,
+            >,
             _,
         > = lib.get(b"eglGetDisplay");
         let initialize: Result<
-            libloading::Symbol<unsafe extern "C" fn(*mut std::ffi::c_void, *mut i32, *mut i32) -> u32>,
+            libloading::Symbol<
+                unsafe extern "C" fn(*mut std::ffi::c_void, *mut i32, *mut i32) -> u32,
+            >,
             _,
         > = lib.get(b"eglInitialize");
         let terminate: Result<
