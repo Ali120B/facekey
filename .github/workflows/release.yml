@@ -25,6 +25,8 @@ jobs:
             qt6-base-dev qt6-base-dev-tools \
             qt6-declarative-dev qt6-declarative-dev-tools \
             qt6-tools-dev qt6-tools-dev-tools \
+            qml6-module-qtquick qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts qml6-module-qtmultimedia \
             librsvg2-bin file wget desktop-file-utils
 
       - name: Locate qmake6
@@ -57,9 +59,10 @@ jobs:
           export QML_SOURCES_PATHS="$PWD/qml"
           # Ship the Wayland platform plugins too: sessions that force
           # QT_QPA_PLATFORM=wayland (e.g. Hyprland) abort at startup when
-          # only xcb is bundled. Library deps of these plugins are pulled
-          # in automatically by the Qt plugin.
-          export EXTRA_QT_PLUGINS="platforms/libqwayland-egl.so;platforms/libqwayland-generic.so"
+          # only xcb is bundled. NOTE: this must be EXTRA_PLATFORM_PLUGINS
+          # (bare .so names); EXTRA_QT_PLUGINS is deprecated and ignores
+          # platforms/ paths.
+          export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
           ./linuxdeploy-x86_64.AppImage --appdir AppDir \
             -e "target/release/${APP_ID}" \
             -d "Packaging/${APP_ID}.desktop" \
@@ -67,6 +70,16 @@ jobs:
             --plugin qt \
             --output appimage
           ls -l ./*.AppImage
+
+      - name: Verify bundled Qt payload
+        run: |
+          # Fail loudly instead of shipping a broken bundle: the Wayland
+          # platform plugins and the QML imports must actually be present.
+          test -f AppDir/usr/plugins/platforms/libqwayland-generic.so
+          test -f AppDir/usr/plugins/platforms/libqwayland-egl.so
+          test -d AppDir/usr/qml/QtQuick
+          test -d AppDir/usr/qml/QtQuick/Controls
+          echo "Qt payload OK"
 
       - name: Rename AppImage
         run: |
