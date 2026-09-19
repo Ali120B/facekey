@@ -404,6 +404,15 @@ ApplicationWindow {
             }
             Item { Layout.fillWidth: true }
             Label { text: "v" + backend.app_version; font.pixelSize: 12; color: dim }
+            UiButton {
+                text: "Health"
+                kind: "ghost"
+                font.pixelSize: 12
+                onClicked: {
+                    backend.run_preflight()
+                    doctorDialog.open()
+                }
+            }
         }
 
         // Faces card (list + register merged)
@@ -708,6 +717,71 @@ ApplicationWindow {
                 MouseArea {
                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                     onClicked: Qt.openUrlExternally("https://github.com/Ali120B")
+                }
+            }
+        }
+    }
+
+    // ── Doctor dialog (permanent preflight) ───────────────────────────────
+    Dialog {
+        id: doctorDialog
+        title: "System health"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: 480
+        background: Rectangle { color: card; radius: 14; border.width: 1; border.color: line }
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 10
+
+            Repeater {
+                model: [
+                    { ok: backend.setup_howdy, title: "Howdy face engine", sub: backend.setup_howdy ? "installed" : "missing — re-run setup below" },
+                    { ok: backend.setup_pam_python, title: "PAM module", sub: backend.setup_pam_python ? "pam_python.so present" : "missing — face auth cannot engage" },
+                    { ok: backend.setup_models, title: "AI models", sub: backend.setup_models ? "dlib data on disk" : "missing" },
+                    { ok: backend.setup_agent, title: "Polkit agent", sub: backend.setup_agent ? "running" : "not running — dialogs fall back to terminal" },
+                    { ok: backend.setup_ir_camera, title: "IR camera", sub: backend.setup_ir_camera ? "detected" : "none detected" },
+                    { ok: backend.camera_configured, title: "Camera configured", sub: backend.camera_configured ? "device_path is set" : "not set" }
+                ]
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    Rectangle {
+                        width: 9; height: 9; radius: 5
+                        Layout.alignment: Qt.AlignVCenter
+                        color: modelData.ok ? good : bad
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 0
+                        Label { text: modelData.title; font.pixelSize: 13; font.bold: true; color: ink }
+                        Label { text: modelData.sub; font.pixelSize: 11; color: dim; elide: Text.ElideRight; Layout.fillWidth: true }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                UiButton {
+                    text: "Re-check"
+                    kind: "tonal"
+                    onClicked: {
+                        backend.run_preflight()
+                        backend.load_video_devices()
+                        backend.check_pam_status()
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                UiButton { text: "Close"; kind: "ghost"; onClicked: doctorDialog.close() }
+                UiButton {
+                    text: "Re-run setup"
+                    kind: "accent"
+                    onClicked: {
+                        doctorDialog.close()
+                        setupWizard.step = 1
+                        setupWizard.visible = true
+                    }
                 }
             }
         }
