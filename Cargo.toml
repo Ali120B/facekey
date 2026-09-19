@@ -1,6 +1,6 @@
 [package]
 name = "facekey"
-version = "3.0.8"
+version = "3.0.9"
 edition = "2021"
 description = "FaceKey - Face ID for Linux. Qt front-end and setup wizard for Howdy face authentication"
 authors = ["Ali120B"]
@@ -9,6 +9,7 @@ authors = ["Ali120B"]
 cxx = "1.0"
 cxx-qt = "0.8.1"
 cxx-qt-lib = { version = "0.8.1", features = ["qt_full"] }
+libloading = "0.8"
 
 [build-dependencies]
 cxx-qt-build = "0.8.1"
