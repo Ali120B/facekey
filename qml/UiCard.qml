@@ -13,6 +13,11 @@ Rectangle {
     border.width: 1
     border.color: "#2B303B"
 
+    // Size to content unless the parent layout overrides (fillHeight /
+    // preferredHeight). Without this the card collapses and rows overlap.
+    implicitHeight: inner.implicitHeight + pad * 2
+    implicitWidth: inner.implicitWidth + pad * 2
+
     ColumnLayout {
         id: inner
         anchors.fill: parent

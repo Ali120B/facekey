@@ -332,12 +332,22 @@ ApplicationWindow {
 
     // ── Main layout (scrolls when the preview card expands) ───────────────
     ScrollView {
+        id: mainScroll
         anchors.fill: parent
         contentWidth: availableWidth
         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        ScrollBar.vertical: ScrollBar {
+            // Only affordance: a slim accent bar, and only while overflowing
+            policy: mainScroll.contentHeight > mainScroll.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+            contentItem: Rectangle { implicitWidth: 6; radius: 3; color: "#8B7CFF"; opacity: 0.65 }
+            background: Item { implicitWidth: 6 }
+        }
 
         ColumnLayout {
             anchors { left: parent.left; right: parent.right; top: parent.top; margins: 24 }
+            // Stretch to the viewport when content is short (fullscreen fills
+            // up instead of leaving a void), scroll when it overflows.
+            height: Math.max(implicitHeight, parent.height - 48)
             spacing: 14
 
         // Header: status pill + title + version
@@ -379,10 +389,12 @@ ApplicationWindow {
             }
         }
 
-        // Faces card (list + register merged)
+        // Faces card (list + register merged) — the flexible card:
+        // absorbs extra space in tall windows via the list.
         UiCard {
             Layout.fillWidth: true
-            Layout.preferredHeight: 320
+            Layout.fillHeight: true
+            Layout.minimumHeight: 240
 
             RowLayout {
                 Layout.fillWidth: true
@@ -646,21 +658,12 @@ ApplicationWindow {
         // Integration card
         UiCard {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.minimumHeight: 170
-            clip: true
 
             Label { text: "System integration"; font.pixelSize: 15; font.bold: true; color: ink }
 
-            ScrollView {
+            ColumnLayout {
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-                contentWidth: availableWidth
-                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 12
+                spacing: 12
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -738,7 +741,6 @@ ApplicationWindow {
                         }
                     }
                 }
-            }
         }
 
         // Status + footer
