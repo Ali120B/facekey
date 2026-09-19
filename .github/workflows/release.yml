@@ -85,12 +85,12 @@ jobs:
         run: |
           QTP="$(qmake6 -query QT_INSTALL_PLUGINS)"
           echo "Qt plugins dir: $QTP"
-          for d in wayland-graphics-integration-client wayland-decoration-client wayland-shell-integration; do
+          for d in wayland-graphics-integration-client wayland-decoration-client wayland-shell-integration egldeviceintegrations; do
             mkdir -p "AppDir/usr/plugins/$d"
             cp -L "$QTP/$d/"*.so "AppDir/usr/plugins/$d/"
           done
           mkdir -p AppDir/usr/lib
-          for so in AppDir/usr/plugins/wayland-*/lib*.so; do
+          for so in AppDir/usr/plugins/wayland-*/lib*.so AppDir/usr/plugins/egldeviceintegrations/lib*.so; do
             for dep in $(ldd "$so" | grep "=> /" | awk '{print $3}'); do
               base="$(basename "$dep")"
               case "$base" in
@@ -103,12 +103,12 @@ jobs:
               esac
             done
           done
-          for f in AppDir/usr/plugins/wayland-*/lib*.so AppDir/usr/lib/libQt6Wayland* AppDir/usr/lib/libwayland* AppDir/usr/lib/libffi.so.*; do
+          for f in AppDir/usr/plugins/wayland-*/lib*.so AppDir/usr/plugins/egldeviceintegrations/lib*.so AppDir/usr/lib/libQt6Wayland* AppDir/usr/lib/libwayland* AppDir/usr/lib/libffi.so.*; do
             [ -e "$f" ] || continue
             patchelf --set-rpath '$ORIGIN/../../lib:$ORIGIN' "$f" 2>/dev/null || patchelf --set-rpath '$ORIGIN' "$f"
           done
           echo "--- unresolved deps (must be empty) ---"
-          LD_LIBRARY_PATH="$PWD/AppDir/usr/lib" ldd AppDir/usr/plugins/wayland-*/lib*.so 2>/dev/null | grep "not found" && exit 1 || true
+          LD_LIBRARY_PATH="$PWD/AppDir/usr/lib" ldd AppDir/usr/plugins/wayland-*/lib*.so AppDir/usr/plugins/egldeviceintegrations/lib*.so 2>/dev/null | grep "not found" && exit 1 || true
           echo "wayland integration OK"
 
       - name: Produce AppImage
@@ -130,6 +130,7 @@ jobs:
           test -d AppDir/usr/qml/QtQml/Models
           test -n "$(ls AppDir/usr/plugins/multimedia/*.so 2>/dev/null)"
           test -n "$(ls AppDir/usr/plugins/wayland-graphics-integration-client/*.so 2>/dev/null)"
+          test -n "$(ls AppDir/usr/plugins/egldeviceintegrations/*.so 2>/dev/null)"
           echo "Qt payload OK"
 
       - name: Rename AppImage
