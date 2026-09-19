@@ -1,0 +1,28 @@
+# Maintainer: Ali120B <alibashmail2010@yahoo.com>
+
+pkgname=ultimate-howdy-gui
+pkgver=1.9.0
+pkgrel=1
+pkgdesc="Qt GUI for managing Howdy face authentication on Windows Hello supported devices"
+arch=('x86_64')
+url="https://github.com/Ali120B/ultimate-howdy-gui"
+license=('MIT')
+depends=('qt6-base' 'qt6-declarative' 'qt6-multimedia' 'howdy' 'polkit' 'v4l-utils')
+makedepends=('rust' 'cargo' 'clang')
+options=(!lto)
+source=()
+sha256sums=()
+
+build() {
+    cd "$srcdir/../.."
+    cargo build --release
+}
+
+package() {
+    cd "$srcdir/../.."
+    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+    install -Dm644 "Packaging/ultimate-howdy-gui.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$pkgname.svg"
+    install -Dm644 "Packaging/$pkgname.desktop" "$pkgdir/usr/share/applications/$pkgname.desktop"
+    install -Dm644 "Packaging/io.github.ali120b.$pkgname.policy" "$pkgdir/usr/share/polkit-1/actions/io.github.ali120b.$pkgname.policy"
+}

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Ultimate Howdy GUI
+Comment=Qt GUI for managing Howdy face authentication
+Exec=ultimate-howdy-gui
+Icon=ultimate-howdy-gui
+Terminal=false
+Type=Application
+Categories=System;Settings;
+Keywords=howdy;face;authentication;camera;

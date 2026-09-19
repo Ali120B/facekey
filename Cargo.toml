@@ -1,0 +1,18 @@
+[package]
+name = "ultimate-howdy-gui"
+version = "1.9.0"
+edition = "2021"
+description = "Ultimate Howdy GUI - Qt front-end for Howdy face authentication"
+authors = ["Ali120B"]
+
+[dependencies]
+cxx = "1.0"
+cxx-qt = "0.8.1"
+cxx-qt-lib = { version = "0.8.1", features = ["qt_full"] }
+
+[build-dependencies]
+cxx-qt-build = "0.8.1"
+
+[[bin]]
+name = "ultimate-howdy-gui"
+path = "src/main.rs"

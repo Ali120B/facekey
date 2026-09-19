@@ -1,0 +1,79 @@
+name: Release AppImage
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    runs-on: ubuntu-24.04
+    env:
+      APP_ID: ultimate-howdy-gui
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang libclang-dev cmake ninja-build pkg-config \
+            qt6-base-dev qt6-base-dev-tools \
+            qt6-declarative-dev qt6-declarative-dev-tools \
+            qt6-tools-dev qt6-tools-dev-tools \
+            librsvg2-bin file wget desktop-file-utils
+
+      - name: Locate qmake6
+        run: |
+          QMAKE="$(command -v qmake6 || ls /usr/lib/qt6/bin/qmake 2>/dev/null || ls /usr/lib/x86_64-linux-gnu/qt6/bin/qmake 2>/dev/null || true)"
+          echo "qmake: $QMAKE"
+          test -n "$QMAKE"
+          echo "$(dirname "$QMAKE")" >> "$GITHUB_PATH"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Fetch linuxdeploy
+        run: |
+          wget -q -O linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q -O linuxdeploy-plugin-qt-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy-*.AppImage
+          ./linuxdeploy-x86_64.AppImage --appimage-version 2>&1 | head -n 2 || true
+
+      - name: Bundle AppDir
+        run: |
+          export QML_SOURCES_PATHS="$PWD/qml"
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
+            -e "target/release/${APP_ID}" \
+            -d "Packaging/${APP_ID}.desktop" \
+            -i "Packaging/${APP_ID}.svg" \
+            --plugin qt \
+            --output appimage
+          ls -l ./*.AppImage
+
+      - name: Rename AppImage
+        run: |
+          SRC="$(ls -t ./*.AppImage | head -n 1)"
+          DST="${APP_ID}-${GITHUB_REF_NAME}-x86_64.AppImage"
+          mv "$SRC" "$DST"
+          echo "APPIMAGE=$DST" >> "$GITHUB_ENV"
+          ls -l "$DST"
+
+      - name: Attach to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: ${{ env.APPIMAGE }}
