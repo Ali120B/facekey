@@ -15,6 +15,10 @@ fn print_help() {
 }
 
 fn main() {
+    // Pin the FFmpeg camera backend: on some systems QtMultimedia would
+    // otherwise probe a half-present GStreamer stack and spam assertion
+    // failures while opening cameras.
+    std::env::set_var("QT_MEDIA_BACKEND", "ffmpeg");
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--test-run" => std::env::set_var("FACEKEY_TEST_RUN", "1"),

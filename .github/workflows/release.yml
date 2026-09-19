@@ -29,7 +29,7 @@ jobs:
             qml6-module-qtquick-layouts qml6-module-qtmultimedia \
             qml6-module-qtqml-workerscript qml6-module-qtquick-templates \
             qml6-module-qtquick-window qml6-module-qtqml-models \
-            xvfb \
+            patchelf xvfb \
             librsvg2-bin file wget desktop-file-utils
 
       - name: Locate qmake6
@@ -73,8 +73,47 @@ jobs:
             -e "target/release/${APP_ID}" \
             -d "Packaging/${APP_ID}.desktop" \
             -i "Packaging/${APP_ID}.svg" \
-            --plugin qt \
-            --output appimage
+            --plugin qt
+          ls AppDir/usr/plugins/platforms/ | head -n 20
+
+      - name: Deploy Wayland integration plugins
+        # The Qt plugin ships the wayland *platform* plugins but not the
+        # client integrations Qt needs for EGL contexts on Wayland. Without
+        # them there is no GL context, RHI fails, and the app aborts.
+        # Missing lib deps are chased via ldd (only Qt/Wayland/ffi libs —
+        # never system libc-class libs) and rpath-fixed like siblings.
+        run: |
+          QTP="$(qmake6 -query QT_INSTALL_PLUGINS)"
+          echo "Qt plugins dir: $QTP"
+          for d in wayland-graphics-integration-client wayland-decoration-client wayland-shell-integration; do
+            mkdir -p "AppDir/usr/plugins/$d"
+            cp -L "$QTP/$d/"*.so "AppDir/usr/plugins/$d/"
+          done
+          mkdir -p AppDir/usr/lib
+          for so in AppDir/usr/plugins/wayland-*/lib*.so; do
+            for dep in $(ldd "$so" | grep "=> /" | awk '{print $3}'); do
+              base="$(basename "$dep")"
+              case "$base" in
+                libQt6Wayland*|libwayland*|libffi.so.*)
+                  if [ ! -e "AppDir/usr/lib/$base" ]; then
+                    echo "bundling dep: $base"
+                    cp -L "$dep" AppDir/usr/lib/
+                  fi
+                  ;;
+              esac
+            done
+          done
+          for f in AppDir/usr/plugins/wayland-*/lib*.so AppDir/usr/lib/libQt6Wayland* AppDir/usr/lib/libwayland* AppDir/usr/lib/libffi.so.*; do
+            [ -e "$f" ] || continue
+            patchelf --set-rpath '$ORIGIN/../../lib:$ORIGIN' "$f" 2>/dev/null || patchelf --set-rpath '$ORIGIN' "$f"
+          done
+          echo "--- unresolved deps (must be empty) ---"
+          LD_LIBRARY_PATH="$PWD/AppDir/usr/lib" ldd AppDir/usr/plugins/wayland-*/lib*.so 2>/dev/null | grep "not found" && exit 1 || true
+          echo "wayland integration OK"
+
+      - name: Produce AppImage
+        run: |
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage
           ls -l ./*.AppImage
 
       - name: Verify bundled Qt payload
@@ -90,6 +129,7 @@ jobs:
           test -d AppDir/usr/qml/QtQml/WorkerScript
           test -d AppDir/usr/qml/QtQml/Models
           test -n "$(ls AppDir/usr/plugins/multimedia/*.so 2>/dev/null)"
+          test -n "$(ls AppDir/usr/plugins/wayland-graphics-integration-client/*.so 2>/dev/null)"
           echo "Qt payload OK"
 
       - name: Rename AppImage
