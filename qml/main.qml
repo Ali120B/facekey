@@ -46,12 +46,16 @@ ApplicationWindow {
 
     // Match a /dev path to Qt's camera device list by stable id instead
     // of position: Qt also enumerates metadata nodes, so indices shift.
+    // NOTE: CameraDevice.id arrives as a Qt string object without JS
+    // methods — String() it before calling endsWith(), or the binding
+    // throws and the preview stays black.
     function qtCamIndex(devices, path) {
-        if (!path) return 0
+        path = String(path || "")
+        if (path === "" || path === "undefined") return 0
         var base = path.split("/").pop()
         for (var i = 0; i < devices.length; i++) {
-            var id = devices[i].id || ""
-            if (id === path || id.endsWith("/" + base)) return i
+            var id = String(devices[i].id || "")
+            if (id === path || (base !== "" && id.endsWith("/" + base))) return i
         }
         return 0
     }
