@@ -55,6 +55,11 @@ jobs:
       - name: Bundle AppDir
         run: |
           export QML_SOURCES_PATHS="$PWD/qml"
+          # Ship the Wayland platform plugins too: sessions that force
+          # QT_QPA_PLATFORM=wayland (e.g. Hyprland) abort at startup when
+          # only xcb is bundled. Library deps of these plugins are pulled
+          # in automatically by the Qt plugin.
+          export EXTRA_QT_PLUGINS="platforms/libqwayland-egl.so;platforms/libqwayland-generic.so"
           ./linuxdeploy-x86_64.AppImage --appdir AppDir \
             -e "target/release/${APP_ID}" \
             -d "Packaging/${APP_ID}.desktop" \
