@@ -42,6 +42,7 @@ pub mod qobject {
         #[qproperty(QString, install_log)]
         #[qproperty(bool, install_running)]
         #[qproperty(bool, install_done)]
+        #[qproperty(bool, install_failed)]
         #[qproperty(QString, install_error)]
         type HowdyBackend = super::HowdyBackendRust;
 
@@ -175,6 +176,7 @@ pub struct HowdyBackendRust {
     install_log: QString,
     install_running: bool,
     install_done: bool,
+    install_failed: bool,
     install_error: QString,
 }
 
@@ -183,7 +185,8 @@ const PAM_LINE_ARCH: &str = "auth sufficient pam_python.so /lib/security/howdy/p
 // Kept for reference; use pam_module_lines() instead of these directly.
 #[allow(dead_code)]
 const PAM_LINE: &str = PAM_LINE_DEBIAN;
-const PAM_SDDM: &str = "/etc/pam.d/sddm";const PAM_KDE: &str = "/etc/pam.d/kde";
+const PAM_SDDM: &str = "/etc/pam.d/sddm";
+const PAM_KDE: &str = "/etc/pam.d/kde";
 const PAM_SUDO: &str = "/etc/pam.d/sudo";
 const PAM_SYSTEM_LOGIN: &str = "/etc/pam.d/system-local-login";
 const PAM_PLASMA_LM: &str = "/etc/pam.d/plasmalogin";
@@ -247,6 +250,50 @@ fn pkexec_howdy(howdy: &str, user: &str, args: &[&str]) -> std::io::Result<std::
         .output()
 }
 
+// ── Enrollment result channel (findings 5+8) ──
+// Results travel in process memory, tagged with the request sequence that
+// produced them. Stale completions (timeout abandon, second instance) and
+// forged /tmp files can never be consumed as the active result.
+struct AddResult {
+    seq: u64,
+    message: String,
+    face_id: Option<i32>,
+}
+
+struct PendingAdd {
+    seq: u64,
+    rx: std::sync::mpsc::Receiver<AddResult>,
+}
+
+/// (next sequence, in-flight request, face id of last success)
+static ADD_STATE: std::sync::Mutex<(u64, Option<PendingAdd>, Option<i32>)> =
+    std::sync::Mutex::new((0, None, None));
+
+/// Model ids parsed from `howdy list` output
+fn parse_model_ids(output: &str) -> Vec<i32> {
+    output
+        .lines()
+        .filter_map(|l| {
+            let first = l.trim().split_whitespace().next()?;
+            let c = first.chars().next()?;
+            if c.is_ascii_digit() {
+                first.parse::<i32>().ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn highest_model_id(howdy: &str, user: &str) -> Option<i32> {
+    let out = pkexec_howdy(howdy, user, &["list"]).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_model_ids(&String::from_utf8_lossy(&out.stdout))
+        .into_iter()
+        .max()
+}
 
 /// Dry-run mode for UI walkthroughs (`facekey --test-run`): every
 /// mutating/external call short-circuits to a canned response so no pkexec,
@@ -370,9 +417,9 @@ fn pam_python_present() -> bool {
 }
 
 fn dlib_models_present() -> bool {
-    DLIB_MODELS.iter().all(|f| {
-        Path::new(&format!("/usr/lib/security/howdy/dlib-data/{}", f)).exists()
-    })
+    DLIB_MODELS
+        .iter()
+        .all(|f| Path::new(&format!("/usr/lib/security/howdy/dlib-data/{}", f)).exists())
 }
 
 fn polkit_agent_running() -> bool {
@@ -383,6 +430,107 @@ fn polkit_agent_running() -> bool {
         ])
         .output()
         .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+// ── Privileged file staging (finding 2) ──
+// Predictable /tmp names let another local user swap content between our
+// write and the pkexec copy. Instead every staged file goes into a 0700
+// per-user dir (root can still read it for the copy) under a unique
+// create_new name, so nothing can be pre-planted or swapped.
+
+/// Private staging dir for files a later pkexec call consumes
+fn staging_dir() -> Option<std::path::PathBuf> {
+    let mut user: String = target_user()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    if user.is_empty() {
+        user = "user".to_string();
+    }
+    let dir = std::env::temp_dir().join(format!("facekey-{}", user));
+    std::fs::create_dir_all(&dir).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Some(dir)
+}
+
+/// Write content to a uniquely-named 0600 file in the staging dir.
+/// Never overwrites: create_new fails on collision and we retry.
+fn stage_file(stem: &str, content: &str) -> Option<std::path::PathBuf> {
+    let dir = staging_dir()?;
+    for i in 0..100 {
+        let path = dir.join(format!("{}-{}-{}.tmp", stem, std::process::id(), i));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                if f.write_all(content.as_bytes()).is_err() {
+                    let _ = std::fs::remove_file(&path);
+                    return None;
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+                }
+                return Some(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+// ── Config backups (finding 9) ──
+// The original bytes of every file we rewrite through pkexec are kept in
+// ~/.local/share/facekey/backups/<name>.<unixts>.bak so a bad edit is a
+// single `sudo cp` away from recovery.
+
+/// Back up user-readable original content before a privileged rewrite.
+/// Returns the backup path for the status message, if it worked.
+fn backup_file(original_path: &str, content: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let dir = Path::new(&home).join(".local/share/facekey/backups");
+    std::fs::create_dir_all(&dir).ok()?;
+    let base = original_path.rsplit('/').next().unwrap_or("file");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dest = dir.join(format!("{}.{}.bak", base, ts));
+    std::fs::write(&dest, content).ok()?;
+    Some(dest.to_string_lossy().to_string())
+}
+
+/// PAM files FaceKey is allowed to manage (finding 3). The QML-exposed
+/// toggle takes a path, but anything outside this list is refused — a
+/// compromised or future caller cannot turn the invokable into an
+/// arbitrary privileged file writer.
+fn pam_managed(path: &str) -> bool {
+    [
+        PAM_SDDM,
+        PAM_KDE,
+        PAM_SUDO,
+        PAM_SYSTEM_LOGIN,
+        PAM_PLASMA_LM,
+        PAM_POLKIT,
+        PAM_HYPRLOCK,
+    ]
+    .contains(&path)
+}
+
+/// True only for existing regular files (rejects symlinks, dirs, …)
+fn is_plain_file(path: &str) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|m| m.is_file() && !m.file_type().is_symlink())
         .unwrap_or(false)
 }
 
@@ -435,9 +583,7 @@ fn probe_video_device(path: &str) -> CameraProbe {
     }
     sizes.sort_by_key(|(w, h)| w.saturating_mul(*h));
     // IR sensors typically expose a small square frame (e.g. 340x340)
-    let likely_ir = sizes
-        .iter()
-        .any(|(w, h)| w == h && *w <= 480 && *w >= 100);
+    let likely_ir = sizes.iter().any(|(w, h)| w == h && *w <= 480 && *w >= 100);
     let summary = sizes
         .last()
         .map(|(w, h)| format!("{}x{}", w, h))
@@ -480,9 +626,8 @@ impl qobject::HowdyBackend {
         if test_run() {
             self.as_mut().set_device_supported(true);
             self.as_mut().set_howdy_enabled(true);
-            self.as_mut().set_status_message(QString::from(
-                "Test mode: simulated IR camera ready",
-            ));
+            self.as_mut()
+                .set_status_message(QString::from("Test mode: simulated IR camera ready"));
             return;
         }
         // Check multiple conditions for device support:
@@ -604,9 +749,8 @@ impl qobject::HowdyBackend {
             models.append_clone(&QString::from("0  2026-01-01 12:00  Demo Face"));
             models.append_clone(&QString::from("1  2026-01-02 12:00  Glasses"));
             self.as_mut().set_face_models(models);
-            self.as_mut().set_status_message(QString::from(
-                "Found 2 registered face(s) (test mode)",
-            ));
+            self.as_mut()
+                .set_status_message(QString::from("Found 2 registered face(s) (test mode)"));
             return;
         }
         let howdy = match find_howdy() {
@@ -720,15 +864,26 @@ impl qobject::HowdyBackend {
             return;
         }
 
+        // Per-request channel, set up before any branch so test and real
+        // flows share the same completion plumbing.
+        let seq = {
+            let mut st = ADD_STATE.lock().unwrap();
+            st.0 = st.0.wrapping_add(1);
+            st.0
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        ADD_STATE.lock().unwrap().1 = Some(PendingAdd { seq, rx });
+
         if test_run() {
             self.as_mut()
                 .set_status_message(QString::from("Look at the camera..."));
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                let _ = std::fs::write(
-                    "/tmp/howdy_add_result.txt",
-                    "Face registered successfully",
-                );
+                let _ = tx.send(AddResult {
+                    seq,
+                    message: "Face registered successfully".to_string(),
+                    face_id: None,
+                });
             });
             return;
         }
@@ -746,32 +901,27 @@ impl qobject::HowdyBackend {
         self.as_mut()
             .set_status_message(QString::from("Look at the camera..."));
 
-        // Spawn a thread to run the blocking pkexec call.
+        // Spawn a thread to run the blocking pkexec calls.
         // NOTE: stock howdy ignores any name argument when -y is passed and
         // always labels the model "Model #N", so the requested name is applied
-        // afterwards by patching the fresh entry in the JSON model store —
-        // chained in the SAME pkexec call so there is only one auth dialog.
+        // afterwards by patching the fresh entry in the JSON model store.
+        // No shell is used anywhere here (finding 1): user, label and paths
+        // travel as argv, never interpolated into a command string.
         let howdy_clone = howdy.clone();
-        let name_clone = name_str.clone();
+        let label: String = name_str.chars().take(24).collect();
         let user_clone = target_user();
 
         std::thread::spawn(move || {
-            let label: String = name_clone.chars().take(24).collect();
-            let safe_label = label.replace('\'', "");
-            let script = format!(
-                "/usr/bin/env SUDO_USER={u} {h} -U {u} add -y && /usr/bin/python3 -c \"import json; p='/lib/security/howdy/models/{u}.dat'; m=json.load(open(p)); m[-1]['label']='{l}'; json.dump(m, open(p, 'w'))\"",
-                u = user_clone,
-                h = howdy_clone,
-                l = safe_label
-            );
-            let output = Command::new("pkexec")
-                .args(["/usr/bin/bash", "-c", &script])
-                .output();
-
-            let result_msg = match output {
+            // Step 1: capture. Howdy prints no usable id, so face_id stays None
+            // unless a future version reports one.
+            let add_out = pkexec_howdy(&howdy_clone, &user_clone, &["add", "-y"]);
+            let mut message;
+            let mut face_id = None;
+            let mut captured = false;
+            match add_out {
                 Ok(out) if out.status.success() => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
-                    let face_id = stdout
+                    face_id = stdout
                         .lines()
                         .find(|l| l.trim().starts_with("Face added as "))
                         .and_then(|l| {
@@ -780,10 +930,8 @@ impl qobject::HowdyBackend {
                                 .last()
                                 .and_then(|s| s.parse::<i32>().ok())
                         });
-                    if let Some(id) = face_id {
-                        let _ = std::fs::write("/tmp/howdy_new_face_id.txt", id.to_string());
-                    }
-                    "Face registered successfully".to_string()
+                    captured = true;
+                    message = "Face registered successfully".to_string();
                 }
                 Ok(out) => {
                     let combined = format!(
@@ -793,61 +941,125 @@ impl qobject::HowdyBackend {
                     )
                     .trim()
                     .to_string();
-                    if combined.is_empty() {
+                    message = if combined.is_empty() {
                         format!("Failed (exit code: {:?})", out.status.code())
                     } else {
                         format!("Failed: {}", combined)
+                    };
+                }
+                Err(e) => {
+                    message = format!("Failed: {}", e);
+                }
+            }
+
+            // Step 2: apply the requested label by argv (never shell).
+            // A second auth dialog may appear if the kept authorization lapsed.
+            if captured {
+                let model_dat = format!("/lib/security/howdy/models/{}.dat", user_clone);
+                let patch = "import json,sys; p=sys.argv[1]; m=json.load(open(p)); m[-1]['label']=sys.argv[2][:24]; json.dump(m, open(p, 'w'))";
+                let patch_args = [
+                    "/usr/bin/python3".to_string(),
+                    "-c".to_string(),
+                    patch.to_string(),
+                    model_dat.clone(),
+                    label.clone(),
+                ];
+                let patch_out = Command::new("pkexec").args(&patch_args).output();
+                match patch_out {
+                    Ok(o) if o.status.success() => {}
+                    Ok(o) => {
+                        let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                        message = format!(
+                            "Face captured but the label could not be applied{}",
+                            if err.is_empty() {
+                                String::new()
+                            } else {
+                                format!(": {}", err)
+                            }
+                        );
+                    }
+                    Err(e) => {
+                        message = format!("Face captured but labeling failed: {}", e);
                     }
                 }
-                Err(e) => format!("Failed: {}", e),
-            };
+            }
 
-            let _ = std::fs::write("/tmp/howdy_add_result.txt", &result_msg);
+            let _ = tx.send(AddResult {
+                seq,
+                message,
+                face_id,
+            });
         });
     }
 
-    /// Check if there's a pending add_model result (called periodically from QML)
+    /// Check for a completed add_model (called periodically from QML).
+    /// Only the active request's result is accepted; stale orphans are dropped.
     /// Returns true if a result was found and processed
     pub fn check_add_result(mut self: Pin<&mut Self>) -> bool {
-        if let Ok(result) = std::fs::read_to_string("/tmp/howdy_add_result.txt") {
-            let _ = std::fs::remove_file("/tmp/howdy_add_result.txt");
-            self.as_mut().set_status_message(QString::from(&result));
-            return true;
+        let pending = ADD_STATE.lock().unwrap().1.take();
+        let Some(p) = pending else {
+            return false;
+        };
+        match p.rx.try_recv() {
+            Ok(res) if res.seq == p.seq => {
+                ADD_STATE.lock().unwrap().2 = res.face_id;
+                self.as_mut()
+                    .set_status_message(QString::from(&res.message));
+                true
+            }
+            Ok(_) => false, // stale orphan from an abandoned attempt
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ADD_STATE.lock().unwrap().1 = Some(p);
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.as_mut()
+                    .set_status_message(QString::from("Enrollment process died unexpectedly"));
+                true
+            }
         }
-        false
     }
 
     /// Discard the just-registered face (delete it)
     pub fn discard_face(mut self: Pin<&mut Self>) {
         if test_run() {
-            self.as_mut().set_status_message(QString::from(
-                "Face discarded (test mode)",
-            ));
+            self.as_mut()
+                .set_status_message(QString::from("Face discarded (test mode)"));
             return;
         }
         let howdy = match find_howdy() {
             Some(p) => p,
             None => return,
         };
+        let user = target_user();
 
-        if let Ok(id_str) = std::fs::read_to_string("/tmp/howdy_new_face_id.txt") {
-            let _ = std::fs::remove_file("/tmp/howdy_new_face_id.txt");
-            if let Ok(id) = id_str.trim().parse::<i32>() {
-                let user = target_user();
+        // Prefer the exact id from the last successful enrollment,
+        // otherwise fall back to the highest known model id.
+        let id = ADD_STATE
+            .lock()
+            .unwrap()
+            .2
+            .or_else(|| highest_model_id(&howdy, &user));
+        match id {
+            Some(id) => {
                 let _ = pkexec_howdy(&howdy, &user, &["remove", "-y", &id.to_string()]);
+                ADD_STATE.lock().unwrap().2 = None;
+                self.as_mut()
+                    .set_status_message(QString::from("Face discarded"));
+            }
+            None => {
+                self.as_mut()
+                    .set_status_message(QString::from("Nothing to discard"));
             }
         }
-        self.as_mut()
-            .set_status_message(QString::from("Face discarded"));
     }
 
     /// Remove a face model by its ID
     pub fn remove_model(mut self: Pin<&mut Self>, index: i32) {
         if test_run() {
             let _ = index;
-            self.as_mut().set_status_message(QString::from(
-                "Model removed (test mode)",
-            ));
+            self.as_mut()
+                .set_status_message(QString::from("Model removed (test mode)"));
             self.refresh_models();
             return;
         }
@@ -962,8 +1174,14 @@ impl qobject::HowdyBackend {
                     let trimmed = line.trim();
                     if !trimmed.starts_with('#') && trimmed.starts_with("device_path") {
                         if let Some(value) = trimmed.split('=').nth(1) {
-                            let device = value.trim();
-                            if !device.is_empty() && device != "none" && device != "null" {
+                            let device = value.trim().trim_matches('"');
+                            // Finding 7 (residue): a path that does not exist
+                            // is not a configuration — keep the wizard honest.
+                            if !device.is_empty()
+                                && device != "none"
+                                && device != "null"
+                                && Path::new(device).exists()
+                            {
                                 configured = true;
                             }
                         }
@@ -1069,18 +1287,21 @@ impl qobject::HowdyBackend {
         }
         let new_content = lines.join("\n") + "\n";
 
-        // Write to a temp file, then copy it with elevated privileges
-        let tmp = "/tmp/howdy_config_tmp.ini";
-        if let Err(e) = fs::write(tmp, &new_content) {
+        // Stage in the private dir, then copy it with elevated privileges.
+        // A timestamped backup of the original is kept for recovery.
+        let Some(staged) = stage_file("howdy-config", &new_content) else {
             self.as_mut()
-                .set_status_message(QString::from(&format!("Failed to write temp file: {}", e)));
+                .set_status_message(QString::from("Failed to stage config file"));
             return;
-        }
+        };
+        backup_file(config_path, &current_content);
 
         let output = Command::new("pkexec")
-            .args(["/usr/bin/cp", tmp, config_path])
+            .args(["/usr/bin/cp"])
+            .arg(&staged)
+            .arg(config_path)
             .output();
-        let _ = fs::remove_file(tmp);
+        let _ = fs::remove_file(&staged);
 
         match output {
             Ok(out) if out.status.success() => {
@@ -1171,6 +1392,24 @@ impl qobject::HowdyBackend {
                 "Howdy {} in {} (test mode)",
                 if on { "enabled" } else { "disabled" },
                 fname
+            )));
+            return;
+        }
+        // Finding 3: only managed PAM files, and only plain regular files.
+        // The QML layer passes constants today, but the invokable must not
+        // be an arbitrary privileged file writer for any future caller.
+        if !pam_managed(&file_path) {
+            let fname = file_path.rsplit('/').next().unwrap_or(&file_path);
+            self.as_mut().set_status_message(QString::from(&format!(
+                "Refusing to modify unmanaged PAM file {}",
+                fname
+            )));
+            return;
+        }
+        if Path::new(&file_path).exists() && !is_plain_file(&file_path) {
+            self.as_mut().set_status_message(QString::from(&format!(
+                "Refusing to modify non-regular file {}",
+                file_path
             )));
             return;
         }
@@ -1279,12 +1518,22 @@ impl qobject::HowdyBackend {
             }
         };
 
-        let tmp = "/tmp/howdy_pam_tmp";
-        if let Err(e) = fs::write(tmp, &new_content) {
+        // Finding 9: keep a timestamped backup of the original first so a
+        // bad edit is one `sudo cp` away from recovery.
+        let backup_msg = if Path::new(&file_path).exists() {
+            backup_file(&file_path, &content)
+                .map(|b| format!(" (backup: {})", b))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let Some(staged) = stage_file("howdy-pam", &new_content) else {
             self.as_mut()
-                .set_status_message(QString::from(&format!("Failed to write temp file: {}", e)));
+                .set_status_message(QString::from("Failed to stage PAM file"));
             return;
-        }
+        };
+        let staged_str = staged.to_string_lossy().to_string();
 
         // polkit needs its systemd service sandbox relaxed so Howdy can open the
         // camera (/dev/video*).  polkit-agent-helper@.service ships with PrivateDevices=yes
@@ -1299,29 +1548,41 @@ impl qobject::HowdyBackend {
             let output = if !currently_enabled {
                 let override_content =
                     "[Service]\nPrivateDevices=no\nDeviceAllow=char-video4linux rw\n";
-                let _ = fs::write("/tmp/howdy_polkit_override.conf", override_content);
-                let script =
-                    "cp /tmp/howdy_pam_tmp /etc/pam.d/polkit-1 && \
+                let Some(override_staged) = stage_file("howdy-polkit-override", override_content)
+                else {
+                    let _ = fs::remove_file(&staged);
+                    self.as_mut()
+                        .set_status_message(QString::from("Failed to stage polkit override"));
+                    return;
+                };
+                let script = format!(
+                    "cp '{}' /etc/pam.d/polkit-1 && \
                      mkdir -p '/etc/systemd/system/polkit-agent-helper@.service.d' && \
-                     cp /tmp/howdy_polkit_override.conf \
+                     cp '{}' \
                         '/etc/systemd/system/polkit-agent-helper@.service.d/override.conf' && \
                      systemctl daemon-reload && \
-                     systemctl restart polkit-agent-helper.socket";
+                     systemctl restart polkit-agent-helper.socket",
+                    staged_str,
+                    override_staged.to_string_lossy()
+                );
+                let out = Command::new("pkexec")
+                    .args(["/usr/bin/bash", "-c", &script])
+                    .output();
+                let _ = fs::remove_file(&override_staged);
+                out
+            } else {
+                let script = format!(
+                    "cp '{}' /etc/pam.d/polkit-1 && \
+                     rm -f '/etc/systemd/system/polkit-agent-helper@.service.d/override.conf' && \
+                     systemctl daemon-reload && \
+                     systemctl restart polkit-agent-helper.socket",
+                    staged_str
+                );
                 Command::new("pkexec")
                     .args(["/usr/bin/bash", "-c", &script])
                     .output()
-            } else {
-                let script =
-                    "cp /tmp/howdy_pam_tmp /etc/pam.d/polkit-1 && \
-                     rm -f '/etc/systemd/system/polkit-agent-helper@.service.d/override.conf' && \
-                     systemctl daemon-reload && \
-                     systemctl restart polkit-agent-helper.socket";
-                Command::new("pkexec")
-                    .args(["/usr/bin/bash", "-c", script])
-                    .output()
             };
-            let _ = fs::remove_file(tmp);
-            let _ = fs::remove_file("/tmp/howdy_polkit_override.conf");
+            let _ = fs::remove_file(&staged);
             match output {
                 Ok(out) if out.status.success() => {
                     self.as_mut().set_pam_polkit(!currently_enabled);
@@ -1348,18 +1609,20 @@ impl qobject::HowdyBackend {
         }
 
         let output = Command::new("pkexec")
-            .args(["/usr/bin/cp", tmp, file_path.as_str()])
+            .args(["/usr/bin/cp"])
+            .arg(&staged)
+            .arg(file_path.as_str())
             .output();
-        let _ = fs::remove_file(tmp);
+        let _ = fs::remove_file(&staged);
 
         match output {
             Ok(out) if out.status.success() => {
                 let new_state = !currently_enabled;
                 let fname = file_path.rsplit('/').next().unwrap_or(&file_path);
                 let msg = if new_state {
-                    format!("Howdy enabled in {}", fname)
+                    format!("Howdy enabled in {}{}", fname, backup_msg)
                 } else {
-                    format!("Howdy disabled in {}", fname)
+                    format!("Howdy disabled in {}{}", fname, backup_msg)
                 };
                 match file_path.as_str() {
                     PAM_SDDM => self.as_mut().set_pam_sddm(new_state),
@@ -1396,13 +1659,13 @@ impl qobject::HowdyBackend {
                 return;
             }
         };
-        self.as_mut()
-            .set_status_message(QString::from("Test running — preview window opens, press any key to close it"));
+        self.as_mut().set_status_message(QString::from(
+            "Test running — preview window opens, press any key to close it",
+        ));
 
         if test_run() {
-            self.as_mut().set_status_message(QString::from(
-                "Test complete (test mode): face recognized",
-            ));
+            self.as_mut()
+                .set_status_message(QString::from("Test complete (test mode): face recognized"));
             return;
         }
 
@@ -1465,21 +1728,18 @@ impl qobject::HowdyBackend {
             self.as_mut().set_setup_agent(true);
             self.as_mut().set_setup_ir_camera(true);
             return;
-        }        self.as_mut().set_setup_howdy(find_howdy().is_some());
-        self.as_mut()
-            .set_setup_pam_python(pam_python_present());
-        self.as_mut()
-            .set_setup_models(dlib_models_present());
+        }
+        self.as_mut().set_setup_howdy(find_howdy().is_some());
+        self.as_mut().set_setup_pam_python(pam_python_present());
+        self.as_mut().set_setup_models(dlib_models_present());
         self.as_mut().set_setup_toolchain(
             ["gcc", "make", "pkgconf", "fakeroot"]
                 .iter()
                 .all(|p| which_first(&[*p]).is_some()),
         );
         let helper = which_first(&["yay", "paru"]).unwrap_or_default();
-        self.as_mut()
-            .set_setup_aur_helper(QString::from(&helper));
-        self.as_mut()
-            .set_setup_agent(polkit_agent_running());
+        self.as_mut().set_setup_aur_helper(QString::from(&helper));
+        self.as_mut().set_setup_agent(polkit_agent_running());
         let mut ir = false;
         for d in list_video_devices() {
             if probe_video_device(&d).likely_ir {
@@ -1512,7 +1772,8 @@ impl qobject::HowdyBackend {
                 .set_suggested_camera(QString::from("/dev/video2"));
             self.as_mut().set_setup_ir_camera(true);
             return;
-        }        let devices = list_video_devices();
+        }
+        let devices = list_video_devices();
         let mut candidates = QList::<QString>::default();
         let mut paths = QList::<QString>::default();
         let mut suggested = String::new();
@@ -1548,6 +1809,7 @@ impl qobject::HowdyBackend {
         if test_run() {
             self.as_mut().set_install_running(true);
             self.as_mut().set_install_done(false);
+            self.as_mut().set_install_failed(false);
             self.as_mut().set_install_error(QString::from(""));
             self.as_mut().set_install_log(QString::from(
                 "Test mode: simulating system-package install…\n",
@@ -1577,10 +1839,12 @@ impl qobject::HowdyBackend {
                 let _ = std::fs::write("/tmp/facekey_install_done", "0");
             });
             return;
-        }        self.as_mut().set_install_running(true);
+        }
+        self.as_mut().set_install_running(true);
         self.as_mut().set_install_done(false);
-        self.as_mut()
-            .set_install_error(QString::from(""));
+        self.as_mut().set_install_failed(false);
+        self.as_mut().set_install_error(QString::from(""));
+        let _ = fs::remove_file("/tmp/facekey_install_done");
         self.as_mut().set_install_log(QString::from(
             "Installing system packages — authenticate in the popup…\n",
         ));
@@ -1597,6 +1861,12 @@ impl qobject::HowdyBackend {
             let _ = Command::new("pkexec")
                 .args(["/usr/bin/bash", "-c", &script])
                 .output();
+            // Finding 6: if pkexec itself failed (no auth, no binary), the
+            // script above never ran and wrote no marker — publish one so
+            // the poller cannot spin forever.
+            if !Path::new("/tmp/facekey_install_done").exists() {
+                let _ = fs::write("/tmp/facekey_install_done", "PKEXEC_FAILED");
+            }
         });
     }
 
@@ -1615,11 +1885,21 @@ impl qobject::HowdyBackend {
         if let Ok(code) = fs::read_to_string("/tmp/facekey_install_done") {
             let _ = fs::remove_file("/tmp/facekey_install_done");
             self.as_mut().set_install_running(false);
-            self.as_mut().set_install_done(true);
-            if code.trim() != "0" {
-                self.as_mut().set_install_error(QString::from(
-                    "Package install failed — see log above",
-                ));
+            match code.trim() {
+                "0" => {
+                    self.as_mut().set_install_done(true);
+                }
+                // Finding 6: a failed install is a FAILED state with retry,
+                // never a completed one.
+                other => {
+                    self.as_mut().set_install_failed(true);
+                    let detail = if other == "PKEXEC_FAILED" {
+                        "authorization was cancelled or pkexec failed — press Install to retry"
+                    } else {
+                        "package install failed — see log above, then press Install to retry"
+                    };
+                    self.as_mut().set_install_error(QString::from(detail));
+                }
             }
             return true;
         }
@@ -1635,7 +1915,8 @@ impl qobject::HowdyBackend {
                 "Test mode: would open a terminal running `yay -S howdy pam-python`.\nPress “I finished — check again” to continue the walkthrough.",
             ));
             return;
-        }        let helper = match which_first(&["yay", "paru"]) {
+        }
+        let helper = match which_first(&["yay", "paru"]) {
             Some(h) => h,
             None => {
                 self.as_mut().set_install_error(QString::from(
@@ -1645,18 +1926,11 @@ impl qobject::HowdyBackend {
             }
         };
         let helper_base = helper.rsplit('/').next().unwrap_or(&helper).to_string();
-        let term = match which_first(&[
-            "foot",
-            "kitty",
-            "konsole",
-            "gnome-terminal",
-            "xterm",
-        ]) {
+        let term = match which_first(&["foot", "kitty", "konsole", "gnome-terminal", "xterm"]) {
             Some(t) => t,
             None => {
-                self.as_mut().set_install_error(QString::from(
-                    "No terminal emulator found",
-                ));
+                self.as_mut()
+                    .set_install_error(QString::from("No terminal emulator found"));
                 return;
             }
         };
@@ -1681,10 +1955,8 @@ impl qobject::HowdyBackend {
                 self.as_mut().set_install_error(QString::from(""));
             }
             Err(e) => {
-                self.as_mut().set_install_error(QString::from(&format!(
-                    "Could not open terminal: {}",
-                    e
-                )));
+                self.as_mut()
+                    .set_install_error(QString::from(&format!("Could not open terminal: {}", e)));
             }
         }
     }
@@ -1693,12 +1965,12 @@ impl qobject::HowdyBackend {
     pub fn check_install_done(mut self: Pin<&mut Self>) -> bool {
         if test_run() {
             return true;
-        }        let done = find_howdy().is_some() && pam_python_present();
+        }
+        let done = find_howdy().is_some() && pam_python_present();
         if done {
             self.as_mut().set_setup_howdy(true);
             self.as_mut().set_setup_pam_python(true);
-            self.as_mut()
-                .set_setup_models(dlib_models_present());
+            self.as_mut().set_setup_models(dlib_models_present());
         }
         done
     }

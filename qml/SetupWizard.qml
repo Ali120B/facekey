@@ -231,8 +231,8 @@ Rectangle {
                             Label { text: "qt6, v4l-utils, mpv, polkit, build tools"; font.pixelSize: 11; color: dim }
                         }
                         UiButton {
-                            text: backend.install_done ? "Done ✓" : "Install"
-                            kind: "tonal"
+                            text: backend.install_failed ? "Retry" : backend.install_done ? "Done ✓" : "Install"
+                            kind: backend.install_failed ? "accent" : "tonal"
                             enabled: !backend.install_running && !backend.install_done
                             onClicked: { backend.start_repo_install(); installPoller.start() }
                         }

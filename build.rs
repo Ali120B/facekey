@@ -32,6 +32,6 @@ fn main() {
         "qml/UiCard.qml",
         "qml/SetupWizard.qml",
     ]))
-        .file("src/bridge.rs")
-        .build();
+    .file("src/bridge.rs")
+    .build();
 }

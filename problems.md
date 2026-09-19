@@ -182,3 +182,37 @@ not provide a CI environment or preflight that verifies the supported build setu
 **Fix:** Add CI on a supported Arch-based image with Qt development tooling, and
 document the exact Qt/clang packages and environment variables required by
 `cxx-qt-build`.
+
+---
+
+## Resolution notes (FaceKey maintainer, 2026-09-19)
+
+Audited against current `main`; Codex's line numbers refer to an older revision.
+
+- **1 — Fixed.** Enrollment no longer builds a shell string: `howdy add` and the
+  label patch run as separate `pkexec` argv invocations (label travels as a
+  `python3 -c` argument, never interpolated).
+- **2 — Fixed.** Staged files now live in a `0700` per-user dir under unique
+  `create_new` names (`staging_dir`/`stage_file`); predictable world-writable
+  `/tmp` names are gone.
+- **3 — Fixed.** `toggle_pam` refuses anything outside an internal allowlist
+  (`pam_managed`) and rejects non-regular files/symlinks (`is_plain_file`).
+- **4 — Accepted risk, documented.** `PrivateDevices=no` is required for camera
+  access (a `DeviceAllow` alone does not expose nodes under a private `/dev`),
+  the same override ships inside the Howdy package itself, the app warns before
+  applying it, and disabling removes it again.
+- **5 + 8 — Fixed.** Enrollment results travel over an in-process
+  sequence-tagged channel (`ADD_STATE`); stale/forged completions are dropped,
+  orphaned threads cannot poison later attempts.
+- **6 — Fixed.** `install_failed` is now distinct from `install_done`, the
+  button offers Retry, and a pkexec spawn/authorization failure publishes a
+  completion marker so the poller cannot spin forever.
+- **7 — Mostly rejected.** Commented lines never matched (a `#` prefix fails
+  the `starts_with` checks) and `check_device` already verified existence;
+  `load_video_devices` additionally validates the configured path exists now.
+- **9 — Partially fixed.** Every privileged rewrite keeps a timestamped backup
+  under `~/.local/share/facekey/backups/` (`backup_file`); atomic install and
+  PAM validation remain future work.
+- **10 — Fixed.** `cargo fmt` is clean and enforced.
+- **11 — Partially addressed.** Release CI already compiles AppImages per tag;
+  added a per-push `lint` job (`cargo fmt --check`).
