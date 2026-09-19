@@ -42,6 +42,19 @@ ApplicationWindow {
     // Inline camera preview (off by default so the device stays free
     // for enroll/test, which need exclusive access)
     property bool previewOn: false
+    property string camError: ""
+
+    // Match a /dev path to Qt's camera device list by stable id instead
+    // of position: Qt also enumerates metadata nodes, so indices shift.
+    function qtCamIndex(devices, path) {
+        if (!path) return 0
+        var base = path.split("/").pop()
+        for (var i = 0; i < devices.length; i++) {
+            var id = devices[i].id || ""
+            if (id === path || id.endsWith("/" + base)) return i
+        }
+        return 0
+    }
 
     color: bg
 
@@ -541,7 +554,7 @@ ApplicationWindow {
                     text: previewOn ? "Stop" : "Preview"
                     kind: "tonal"
                     font.pixelSize: 12
-                    onClicked: previewOn = !previewOn
+                    onClicked: { window.camError = ""; previewOn = !previewOn }
                 }
             }
 
@@ -560,7 +573,13 @@ ApplicationWindow {
                 Camera {
                     id: mgrCam
                     active: previewOn && mgrCams.videoInputs.length > 0
-                    cameraDevice: mgrCams.videoInputs.length > 0 ? mgrCams.videoInputs[previewCombo.currentIndex < mgrCams.videoInputs.length ? previewCombo.currentIndex : 0] : null
+                    cameraDevice: {
+                        if (mgrCams.videoInputs.length === 0) return null
+                        var path = (previewCombo.currentIndex >= 0 && previewCombo.currentIndex < backend.camera_paths.length)
+                            ? backend.camera_paths[previewCombo.currentIndex] : ""
+                        return mgrCams.videoInputs[qtCamIndex(mgrCams.videoInputs, path)]
+                    }
+                    onErrorOccurred: (error, errorString) => { window.camError = errorString }
                 }
                 CaptureSession {
                     camera: mgrCam
@@ -577,11 +596,23 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 visible: previewOn
                 spacing: 8
-                ComboBox {
-                    id: previewCombo
+                ColumnLayout {
                     Layout.fillWidth: true
-                    model: backend.camera_candidates
-                    font.pixelSize: 12
+                    spacing: 2
+                    ComboBox {
+                        id: previewCombo
+                        Layout.fillWidth: true
+                        model: backend.camera_candidates
+                        font.pixelSize: 12
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: window.camError !== ""
+                        text: window.camError
+                        color: bad
+                        font.pixelSize: 11
+                        wrapMode: Text.Wrap
+                    }
                 }
                 UiButton {
                     text: "Use this camera"

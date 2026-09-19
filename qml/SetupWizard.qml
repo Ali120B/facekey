@@ -30,13 +30,27 @@ Rectangle {
     property int step: 0
     property string enrollName: ""
     property bool polkitArmed: false
+    property string camError: ""
+
+    // Match a /dev path to Qt's camera device list by stable id instead
+    // of position: Qt also enumerates metadata nodes, so indices shift.
+    function qtCamIndex(devices, path) {
+        if (!path) return 0
+        var base = path.split("/").pop()
+        for (var i = 0; i < devices.length; i++) {
+            var id = devices[i].id || ""
+            if (id === path || id.endsWith("/" + base)) return i
+        }
+        return 0
+    }
 
     function needsInstall() {
         return !(backend.setup_howdy && backend.setup_pam_python)
     }
     function goNext() {
-        // Skip the install step when nothing is missing
-        if (wizard.step === 1 && !wizard.needsInstall()) {
+        // Skip the install step when nothing is missing — but never in
+        // test mode, where the whole point is walking every screen.
+        if (wizard.step === 1 && !wizard.needsInstall() && !backend.is_test_run()) {
             wizard.step = 3
             enterCamera()
             return
@@ -46,7 +60,7 @@ Rectangle {
         if (wizard.step === 6) backend.refresh_models()
     }
     function goBack() {
-        if (wizard.step === 3 && !wizard.needsInstall()) {
+        if (wizard.step === 3 && !wizard.needsInstall() && !backend.is_test_run()) {
             wizard.step = 1
             return
         }
@@ -310,7 +324,13 @@ Rectangle {
                     Camera {
                         id: qtCam
                         active: wizard.visible && wizard.step === 3 && qtCams.videoInputs.length > 0
-                        cameraDevice: qtCams.videoInputs.length > 0 ? qtCams.videoInputs[camCombo.currentIndex < qtCams.videoInputs.length ? camCombo.currentIndex : 0] : null
+                        cameraDevice: {
+                            if (qtCams.videoInputs.length === 0) return null
+                            var path = (camCombo.currentIndex >= 0 && camCombo.currentIndex < backend.camera_paths.length)
+                                ? backend.camera_paths[camCombo.currentIndex] : ""
+                            return qtCams.videoInputs[qtCamIndex(qtCams.videoInputs, path)]
+                        }
+                        onErrorOccurred: (error, errorString) => { wizard.camError = errorString }
                     }
                     CaptureSession {
                         camera: qtCam
@@ -347,7 +367,15 @@ Rectangle {
                     Layout.fillWidth: true
                     font.pixelSize: 12
                     color: dim
-                    text: "Qt sees " + qtCams.videoInputs.length + " device(s); preview follows the dropdown by position — trust the live image."
+                    text: "Qt sees " + qtCams.videoInputs.length + " device(s); the preview follows your pick by device id — trust the live image."
+                    wrapMode: Text.Wrap
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: wizard.camError !== ""
+                    font.pixelSize: 12
+                    color: bad
+                    text: wizard.camError
                     wrapMode: Text.Wrap
                 }
 

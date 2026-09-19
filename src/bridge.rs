@@ -1493,11 +1493,15 @@ impl qobject::HowdyBackend {
     /// Probe cameras with format summaries + IR heuristic
     pub fn probe_cameras(mut self: Pin<&mut Self>) {
         if test_run() {
+            // Mirror the real 4-node layout (incl. metadata nodes) so the
+            // test walkthrough exercises the same indices as hardware.
             let mut candidates = QList::<QString>::default();
             let mut paths = QList::<QString>::default();
             for (d, s) in [
                 ("/dev/video0", "/dev/video0 — 1280x720"),
+                ("/dev/video1", "/dev/video1 — no capture formats"),
                 ("/dev/video2", "/dev/video2 — 340x340 · likely IR"),
+                ("/dev/video3", "/dev/video3 — no capture formats"),
             ] {
                 candidates.append_clone(&QString::from(s));
                 paths.append_clone(&QString::from(d));
