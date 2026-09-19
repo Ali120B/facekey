@@ -27,6 +27,7 @@ jobs:
             qt6-tools-dev qt6-tools-dev-tools \
             qml6-module-qtquick qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtmultimedia \
+            qml6-module-qtqml-workerscript \
             librsvg2-bin file wget desktop-file-utils
 
       - name: Locate qmake6
@@ -79,6 +80,7 @@ jobs:
           test -f AppDir/usr/plugins/platforms/libqwayland-egl.so
           test -d AppDir/usr/qml/QtQuick
           test -d AppDir/usr/qml/QtQuick/Controls
+          test -d AppDir/usr/qml/QtQml/WorkerScript
           echo "Qt payload OK"
 
       - name: Rename AppImage
