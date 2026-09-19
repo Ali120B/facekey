@@ -31,9 +31,9 @@ Rectangle {
     property string enrollName: ""
     property bool polkitArmed: false
     property string camError: ""
-    // Flipped briefly on device change: forces a clean camera restart
-    // even if Qt ignores hot-swaps on a live camera.
-    property bool camHold: true
+    // Flipped briefly around device changes / toggles so the preview
+    // Loader destroys and recreates the Camera (see camera step).
+    property bool camRestart: false
 
     // Match a /dev path to Qt's camera device list by stable id instead
     // of position: Qt also enumerates metadata nodes, so indices shift.
@@ -317,43 +317,54 @@ Rectangle {
                     text: "IR sensors usually expose a small square frame (e.g. 340×340). The guess is highlighted — confirm it in the live preview."
                 }
 
-                Rectangle {
+                MediaDevices { id: qtCams }
+
+                Loader {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.minimumHeight: 240
-                    radius: 14
-                    color: "#0B0C0F"
-                    border.width: 1
-                    border.color: line
-                    clip: true
-
-                    MediaDevices { id: qtCams }
-                    Camera {
-                        id: qtCam
-                        active: wizard.visible && wizard.step === 3 && qtCams.videoInputs.length > 0 && camHold
-                        cameraDevice: {
-                            if (qtCams.videoInputs.length === 0) return null
-                            var path = (camCombo.currentIndex >= 0 && camCombo.currentIndex < backend.camera_paths.length)
-                                ? backend.camera_paths[camCombo.currentIndex] : ""
-                            return qtCams.videoInputs[qtCamIndex(qtCams.videoInputs, path)]
-                        }
-                        onErrorOccurred: (error, errorString) => { wizard.camError = errorString }
-                    }
-                    CaptureSession {
-                        camera: qtCam
-                        videoOutput: previewOut
-                    }
-                    VideoOutput {
-                        id: previewOut
+                    // Same destroy-to-release rule as the manager preview:
+                    // the Camera object must die to free /dev/videoN.
+                    active: wizard.visible && wizard.step === 3 && !camRestart
+                    sourceComponent: wizPreviewComponent
+                }
+                Component {
+                    id: wizPreviewComponent
+                    Rectangle {
                         anchors.fill: parent
-                        fillMode: VideoOutput.PreserveAspectFit
-                    }
-                    Label {
-                        anchors.centerIn: parent
-                        visible: qtCams.videoInputs.length === 0
-                        text: "No Qt camera devices"
-                        color: dim
-                        font.pixelSize: 12
+                        radius: 14
+                        color: "#0B0C0F"
+                        border.width: 1
+                        border.color: line
+                        clip: true
+
+                        Camera {
+                            id: wzCam
+                            active: true
+                            cameraDevice: {
+                                if (qtCams.videoInputs.length === 0) return null
+                                var path = (camCombo.currentIndex >= 0 && camCombo.currentIndex < backend.camera_paths.length)
+                                    ? backend.camera_paths[camCombo.currentIndex] : ""
+                                return qtCams.videoInputs[qtCamIndex(qtCams.videoInputs, path)]
+                            }
+                            onErrorOccurred: (error, errorString) => { wizard.camError = errorString }
+                        }
+                        CaptureSession {
+                            camera: wzCam
+                            videoOutput: wzOut
+                        }
+                        VideoOutput {
+                            id: wzOut
+                            anchors.fill: parent
+                            fillMode: VideoOutput.PreserveAspectFit
+                        }
+                        Label {
+                            anchors.centerIn: parent
+                            visible: qtCams.videoInputs.length === 0
+                            text: "No Qt camera devices"
+                            color: dim
+                            font.pixelSize: 12
+                        }
                     }
                 }
 
@@ -362,8 +373,8 @@ Rectangle {
                     Layout.fillWidth: true
                     model: backend.camera_candidates
                     onActivated: {
-                        camHold = false
-                        Qt.callLater(function() { camHold = true })
+                        camRestart = true
+                        Qt.callLater(function() { camRestart = false })
                     }
                 }
                 Label {

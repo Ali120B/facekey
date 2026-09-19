@@ -43,9 +43,9 @@ ApplicationWindow {
     // for enroll/test, which need exclusive access)
     property bool previewOn: false
     property string camError: ""
-    // Flipped briefly when the device changes: guarantees the Camera
-    // restarts on the new node even if Qt ignores hot-swaps.
-    property bool camHold: true
+    // Flipped briefly around device changes / toggles so the preview
+    // Loader destroys and recreates the Camera (see card below).
+    property bool camRestart: false
 
     // Match a /dev path to Qt's camera device list by stable id instead
     // of position: Qt also enumerates metadata nodes, so indices shift.
@@ -577,37 +577,49 @@ ApplicationWindow {
                 }
             }
 
-            Rectangle {
+            MediaDevices { id: mgrCams }
+
+            // Loader (not just active=false): destroying the Camera object
+            // is what actually releases /dev/videoN. Merely deactivating
+            // leaves the node busy, breaking switches and enrollment.
+            Loader {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumHeight: 180
                 visible: previewOn
-                radius: 10
-                color: "#0B0C0F"
-                border.width: 1
-                border.color: line
-                clip: true
-
-                MediaDevices { id: mgrCams }
-                Camera {
-                    id: mgrCam
-                    active: previewOn && mgrCams.videoInputs.length > 0 && camHold
-                    cameraDevice: {
-                        if (mgrCams.videoInputs.length === 0) return null
-                        var path = (previewCombo.currentIndex >= 0 && previewCombo.currentIndex < backend.camera_paths.length)
-                            ? backend.camera_paths[previewCombo.currentIndex] : ""
-                        return mgrCams.videoInputs[qtCamIndex(mgrCams.videoInputs, path)]
-                    }
-                    onErrorOccurred: (error, errorString) => { window.camError = errorString }
-                }
-                CaptureSession {
-                    camera: mgrCam
-                    videoOutput: mgrPreview
-                }
-                VideoOutput {
-                    id: mgrPreview
+                active: previewOn && !camRestart
+                sourceComponent: previewComponent
+            }
+            Component {
+                id: previewComponent
+                Rectangle {
                     anchors.fill: parent
-                    fillMode: VideoOutput.PreserveAspectFit
+                    radius: 10
+                    color: "#0B0C0F"
+                    border.width: 1
+                    border.color: line
+                    clip: true
+
+                    Camera {
+                        id: pvCam
+                        active: true
+                        cameraDevice: {
+                            if (mgrCams.videoInputs.length === 0) return null
+                            var path = (previewCombo.currentIndex >= 0 && previewCombo.currentIndex < backend.camera_paths.length)
+                                ? backend.camera_paths[previewCombo.currentIndex] : ""
+                            return mgrCams.videoInputs[qtCamIndex(mgrCams.videoInputs, path)]
+                        }
+                        onErrorOccurred: (error, errorString) => { window.camError = errorString }
+                    }
+                    CaptureSession {
+                        camera: pvCam
+                        videoOutput: pvOut
+                    }
+                    VideoOutput {
+                        id: pvOut
+                        anchors.fill: parent
+                        fillMode: VideoOutput.PreserveAspectFit
+                    }
                 }
             }
 
@@ -624,9 +636,9 @@ ApplicationWindow {
                         model: backend.camera_candidates
                         font.pixelSize: 12
                         onActivated: {
-                            // Restart the camera on the newly picked node
-                            camHold = false
-                            Qt.callLater(function() { camHold = true })
+                            // Recreate the Camera on the newly picked node
+                            camRestart = true
+                            Qt.callLater(function() { camRestart = false })
                         }
                     }
                     Label {
