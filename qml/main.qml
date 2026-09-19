@@ -10,7 +10,7 @@ ApplicationWindow {
     height: 940
     minimumWidth: 560
     minimumHeight: 760
-    title: "FaceKey"
+    title: "FaceKey" + (backend.is_test_run() ? " — test mode" : "")
 
     // ── Forced dark theme ───────────────────────────────────────────────────
     palette.window: "#131519"
@@ -49,7 +49,8 @@ ApplicationWindow {
             backend.run_preflight()
             // First run (or broken setup) → guided wizard; it covers the
             // old standalone camera dialog, enroll and PAM wiring.
-            if (!backend.setup_howdy || !backend.setup_pam_python || !backend.camera_configured) {
+            // In --test-run the wizard always shows for walkthroughs.
+            if (backend.is_test_run() || !backend.setup_howdy || !backend.setup_pam_python || !backend.camera_configured) {
                 setupWizard.visible = true
             } else {
                 backend.check_device()

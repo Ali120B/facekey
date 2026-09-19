@@ -129,6 +129,10 @@ pub mod qobject {
         /// True when howdy + pam-python are both present
         #[qinvokable]
         fn check_install_done(self: Pin<&mut HowdyBackend>) -> bool;
+
+        /// True when running with --test-run (all responses simulated)
+        #[qinvokable]
+        fn is_test_run(self: Pin<&mut HowdyBackend>) -> bool;
     }
 }
 
@@ -243,6 +247,15 @@ fn pkexec_howdy(howdy: &str, user: &str, args: &[&str]) -> std::io::Result<std::
         .output()
 }
 
+
+/// Dry-run mode for UI walkthroughs (`facekey --test-run`): every
+/// mutating/external call short-circuits to a canned response so no pkexec,
+/// no howdy and no system change ever happens. QML can query it too.
+fn test_run() -> bool {
+    std::env::var("FACEKEY_TEST_RUN")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
 
 /// The desktop user Howdy models belong to. The GUI runs unprivileged as the
 /// user, but its `pkexec howdy ...` children run as root — and Howdy resolves
@@ -464,6 +477,14 @@ impl qobject::HowdyBackend {
 
     /// Check if device has a supported IR camera for howdy
     pub fn check_device(mut self: Pin<&mut Self>) {
+        if test_run() {
+            self.as_mut().set_device_supported(true);
+            self.as_mut().set_howdy_enabled(true);
+            self.as_mut().set_status_message(QString::from(
+                "Test mode: simulated IR camera ready",
+            ));
+            return;
+        }
         // Check multiple conditions for device support:
         // 1. Check if howdy is installed
         // 2. Use v4l2-ctl to detect video devices (per Arch Wiki)
@@ -578,6 +599,16 @@ impl qobject::HowdyBackend {
 
     /// Refresh the list of face models from howdy
     pub fn refresh_models(mut self: Pin<&mut Self>) {
+        if test_run() {
+            let mut models = QList::<QString>::default();
+            models.append_clone(&QString::from("0  2026-01-01 12:00  Demo Face"));
+            models.append_clone(&QString::from("1  2026-01-02 12:00  Glasses"));
+            self.as_mut().set_face_models(models);
+            self.as_mut().set_status_message(QString::from(
+                "Found 2 registered face(s) (test mode)",
+            ));
+            return;
+        }
         let howdy = match find_howdy() {
             Some(p) => p,
             None => {
@@ -689,6 +720,19 @@ impl qobject::HowdyBackend {
             return;
         }
 
+        if test_run() {
+            self.as_mut()
+                .set_status_message(QString::from("Look at the camera..."));
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let _ = std::fs::write(
+                    "/tmp/howdy_add_result.txt",
+                    "Face registered successfully",
+                );
+            });
+            return;
+        }
+
         let howdy = match find_howdy() {
             Some(p) => p,
             None => {
@@ -775,6 +819,12 @@ impl qobject::HowdyBackend {
 
     /// Discard the just-registered face (delete it)
     pub fn discard_face(mut self: Pin<&mut Self>) {
+        if test_run() {
+            self.as_mut().set_status_message(QString::from(
+                "Face discarded (test mode)",
+            ));
+            return;
+        }
         let howdy = match find_howdy() {
             Some(p) => p,
             None => return,
@@ -793,6 +843,14 @@ impl qobject::HowdyBackend {
 
     /// Remove a face model by its ID
     pub fn remove_model(mut self: Pin<&mut Self>, index: i32) {
+        if test_run() {
+            let _ = index;
+            self.as_mut().set_status_message(QString::from(
+                "Model removed (test mode)",
+            ));
+            self.refresh_models();
+            return;
+        }
         let howdy = match find_howdy() {
             Some(p) => p,
             None => {
@@ -825,6 +883,16 @@ impl qobject::HowdyBackend {
 
     /// Toggle howdy enabled/disabled
     pub fn toggle_enabled(mut self: Pin<&mut Self>) {
+        if test_run() {
+            let current = *self.as_ref().howdy_enabled();
+            self.as_mut().set_howdy_enabled(!current);
+            self.as_mut().set_status_message(QString::from(if current {
+                "Howdy disabled (test mode)"
+            } else {
+                "Howdy enabled (test mode)"
+            }));
+            return;
+        }
         let howdy = match find_howdy() {
             Some(p) => p,
             None => {
@@ -865,6 +933,14 @@ impl qobject::HowdyBackend {
 
     /// Scan /dev/ for video* devices and check if howdy's device_path is already configured
     pub fn load_video_devices(mut self: Pin<&mut Self>) {
+        if test_run() {
+            let mut devices = QList::<QString>::default();
+            devices.append_clone(&QString::from("/dev/video0"));
+            devices.append_clone(&QString::from("/dev/video2"));
+            self.as_mut().set_video_devices(devices);
+            self.as_mut().set_camera_configured(true);
+            return;
+        }
         let device_list: Vec<String> = list_video_devices();
 
         let mut devices = QList::<QString>::default();
@@ -908,6 +984,13 @@ impl qobject::HowdyBackend {
                 .set_status_message(QString::from("No device selected"));
             return;
         }
+        if test_run() {
+            self.as_mut().set_status_message(QString::from(&format!(
+                "Previewing {} (test mode — player not launched)",
+                device_str
+            )));
+            return;
+        }
         match Command::new("mpv").arg(&device_str).spawn() {
             Ok(_) => {
                 self.as_mut().set_status_message(QString::from(&format!(
@@ -928,6 +1011,15 @@ impl qobject::HowdyBackend {
         if device_str.is_empty() {
             self.as_mut()
                 .set_status_message(QString::from("No device selected"));
+            return;
+        }
+
+        if test_run() {
+            self.as_mut().set_camera_configured(true);
+            self.as_mut().set_status_message(QString::from(&format!(
+                "Camera saved: {} (test mode)",
+                device_str
+            )));
             return;
         }
 
@@ -1029,6 +1121,59 @@ impl qobject::HowdyBackend {
     pub fn toggle_pam(mut self: Pin<&mut Self>, file: QString) {
         let file_path = file.to_string();
 
+        if test_run() {
+            let fname = file_path.rsplit('/').next().unwrap_or(&file_path);
+            let on = match file_path.as_str() {
+                PAM_SDDM => {
+                    let cur = *self.as_ref().pam_sddm();
+                    self.as_mut().set_pam_sddm(!cur);
+                    !cur
+                }
+                PAM_KDE => {
+                    let cur = *self.as_ref().pam_kde();
+                    self.as_mut().set_pam_kde(!cur);
+                    !cur
+                }
+                PAM_SUDO => {
+                    let cur = *self.as_ref().pam_sudo();
+                    self.as_mut().set_pam_sudo(!cur);
+                    !cur
+                }
+                PAM_SYSTEM_LOGIN => {
+                    let cur = *self.as_ref().pam_system_login();
+                    self.as_mut().set_pam_system_login(!cur);
+                    !cur
+                }
+                PAM_PLASMA_LM => {
+                    let cur = *self.as_ref().pam_plasma_lm();
+                    self.as_mut().set_pam_plasma_lm(!cur);
+                    !cur
+                }
+                PAM_HYPRLOCK => {
+                    let cur = *self.as_ref().pam_hyprlock();
+                    self.as_mut().set_pam_hyprlock(!cur);
+                    !cur
+                }
+                _ if file_path.as_str() == PAM_POLKIT => {
+                    let cur = *self.as_ref().pam_polkit();
+                    self.as_mut().set_pam_polkit(!cur);
+                    !cur
+                }
+                _ => {
+                    self.as_mut().set_status_message(QString::from(&format!(
+                        "Unknown PAM file {} (test mode)",
+                        fname
+                    )));
+                    return;
+                }
+            };
+            self.as_mut().set_status_message(QString::from(&format!(
+                "Howdy {} in {} (test mode)",
+                if on { "enabled" } else { "disabled" },
+                fname
+            )));
+            return;
+        }
         let content = match fs::read_to_string(&file_path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -1254,6 +1399,13 @@ impl qobject::HowdyBackend {
         self.as_mut()
             .set_status_message(QString::from("Test running — preview window opens, press any key to close it"));
 
+        if test_run() {
+            self.as_mut().set_status_message(QString::from(
+                "Test complete (test mode): face recognized",
+            ));
+            return;
+        }
+
         let user = target_user();
         // Prefer unprivileged: `howdy test` opens an OpenCV preview window,
         // which needs the user's display. Under pkexec the display env is
@@ -1295,9 +1447,25 @@ impl qobject::HowdyBackend {
 
     // ── Setup wizard / Doctor ──
 
+    /// Whether --test-run dry-run mode is active (for QML bindings)
+    pub fn is_test_run(self: Pin<&mut Self>) -> bool {
+        let _ = self;
+        test_run()
+    }
+
     /// Run all setup preflight checks
     pub fn run_preflight(mut self: Pin<&mut Self>) {
-        self.as_mut().set_setup_howdy(find_howdy().is_some());
+        if test_run() {
+            self.as_mut().set_setup_howdy(true);
+            self.as_mut().set_setup_pam_python(true);
+            self.as_mut().set_setup_models(true);
+            self.as_mut().set_setup_toolchain(true);
+            self.as_mut()
+                .set_setup_aur_helper(QString::from("yay (test)"));
+            self.as_mut().set_setup_agent(true);
+            self.as_mut().set_setup_ir_camera(true);
+            return;
+        }        self.as_mut().set_setup_howdy(find_howdy().is_some());
         self.as_mut()
             .set_setup_pam_python(pam_python_present());
         self.as_mut()
@@ -1324,7 +1492,23 @@ impl qobject::HowdyBackend {
 
     /// Probe cameras with format summaries + IR heuristic
     pub fn probe_cameras(mut self: Pin<&mut Self>) {
-        let devices = list_video_devices();
+        if test_run() {
+            let mut candidates = QList::<QString>::default();
+            let mut paths = QList::<QString>::default();
+            for (d, s) in [
+                ("/dev/video0", "/dev/video0 — 1280x720"),
+                ("/dev/video2", "/dev/video2 — 340x340 · likely IR"),
+            ] {
+                candidates.append_clone(&QString::from(s));
+                paths.append_clone(&QString::from(d));
+            }
+            self.as_mut().set_camera_candidates(candidates);
+            self.as_mut().set_camera_paths(paths);
+            self.as_mut()
+                .set_suggested_camera(QString::from("/dev/video2"));
+            self.as_mut().set_setup_ir_camera(true);
+            return;
+        }        let devices = list_video_devices();
         let mut candidates = QList::<QString>::default();
         let mut paths = QList::<QString>::default();
         let mut suggested = String::new();
@@ -1357,7 +1541,31 @@ impl qobject::HowdyBackend {
 
     /// Install repo packages via pkexec pacman in a thread
     pub fn start_repo_install(mut self: Pin<&mut Self>) {
-        self.as_mut().set_install_running(true);
+        if test_run() {
+            self.as_mut().set_install_running(true);
+            self.as_mut().set_install_done(false);
+            self.as_mut().set_install_error(QString::from(""));
+            self.as_mut().set_install_log(QString::from(
+                "Test mode: simulating system-package install…\n",
+            ));
+            std::thread::spawn(move || {
+                for line in [
+                    "resolving dependencies…",
+                    "installing qt6-base qt6-declarative qt6-multimedia…",
+                    "installing v4l-utils mpv polkit gcc make pkgconf fakeroot…",
+                    "done.",
+                ] {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    let mut prev =
+                        std::fs::read_to_string("/tmp/facekey_install.log").unwrap_or_default();
+                    prev.push_str(line);
+                    prev.push('\n');
+                    let _ = std::fs::write("/tmp/facekey_install.log", prev);
+                }
+                let _ = std::fs::write("/tmp/facekey_install_done", "0");
+            });
+            return;
+        }        self.as_mut().set_install_running(true);
         self.as_mut().set_install_done(false);
         self.as_mut()
             .set_install_error(QString::from(""));
@@ -1409,7 +1617,13 @@ impl qobject::HowdyBackend {
     /// Open a user terminal running the AUR install (yay refuses root,
     /// so this runs unelevated and yay asks for sudo itself)
     pub fn launch_aur_install(mut self: Pin<&mut Self>) {
-        let helper = match which_first(&["yay", "paru"]) {
+        if test_run() {
+            self.as_mut().set_install_error(QString::from(""));
+            self.as_mut().set_install_log(QString::from(
+                "Test mode: would open a terminal running `yay -S howdy pam-python`.\nPress “I finished — check again” to continue the walkthrough.",
+            ));
+            return;
+        }        let helper = match which_first(&["yay", "paru"]) {
             Some(h) => h,
             None => {
                 self.as_mut().set_install_error(QString::from(
@@ -1465,7 +1679,9 @@ impl qobject::HowdyBackend {
 
     /// True when howdy + pam-python are both present (refreshes preflight)
     pub fn check_install_done(mut self: Pin<&mut Self>) -> bool {
-        let done = find_howdy().is_some() && pam_python_present();
+        if test_run() {
+            return true;
+        }        let done = find_howdy().is_some() && pam_python_present();
         if done {
             self.as_mut().set_setup_howdy(true);
             self.as_mut().set_setup_pam_python(true);

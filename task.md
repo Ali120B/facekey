@@ -23,6 +23,8 @@ backend trait so Ubuntu can plug in later.
 - [x] Build + offscreen smoke + push
 
 ## Phase 2 — QML wizard screens
+- [x] --test-run dry-run mode: simulated responses everywhere, verified
+      zero pkexec/howdy/mpv/AUR spawns and zero polkit authorizations
 - [x] Welcome → Preflight → Install (log view) → Camera (QtMultimedia
       in-app preview + IR suggestion) → Enroll (reuse flow) →
       Integrate (PAM toggles) → Done
@@ -31,8 +33,9 @@ backend trait so Ubuntu can plug in later.
 - [x] Screenshots under Xvfb (Welcome verified), lint + push
 
 ## Phase 3 — Doctor screen
-- [ ] Reuse preflight as a permanent health page (incl. polkit-agent check)
-- [ ] Push
+- [x] Permanent health dialog (howdy, PAM module, models, agent, IR,
+      device configured) with Re-check + Re-run setup entry
+- [x] Health button in header, lint + push
 
 ## Phase 4 — Release
 - [ ] Bump version, tag, AppImage draft release
