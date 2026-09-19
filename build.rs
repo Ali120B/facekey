@@ -30,6 +30,7 @@ fn main() {
         "qml/UiButton.qml",
         "qml/UiSwitch.qml",
         "qml/UiCard.qml",
+        "qml/SetupWizard.qml",
     ]))
         .file("src/bridge.rs")
         .build();

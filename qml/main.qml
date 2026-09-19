@@ -46,8 +46,11 @@ ApplicationWindow {
             backend.detect_display_managers()
             backend.load_video_devices()
             backend.check_pam_status()
-            if (!backend.camera_configured) {
-                cameraDialog.open()
+            backend.run_preflight()
+            // First run (or broken setup) → guided wizard; it covers the
+            // old standalone camera dialog, enroll and PAM wiring.
+            if (!backend.setup_howdy || !backend.setup_pam_python || !backend.camera_configured) {
+                setupWizard.visible = true
             } else {
                 backend.check_device()
                 backend.refresh_models()
@@ -102,7 +105,9 @@ ApplicationWindow {
                     text: "Cancel"
                     kind: "ghost"
                     onClicked: {
+                        polkitSwitch.busy = true
                         polkitSwitch.checked = false
+                        polkitSwitch.busy = false
                         polkitWarningDialog.close()
                     }
                 }
@@ -664,8 +669,10 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
                         UiSwitch {
                             id: polkitSwitch
+                            property bool busy: false
                             checked: backend.pam_polkit
                             onToggled: {
+                                if (busy) return
                                 if (checked) {
                                     polkitWarningDialog.open()
                                 } else {
@@ -703,6 +710,23 @@ ApplicationWindow {
                     onClicked: Qt.openUrlExternally("https://github.com/Ali120B")
                 }
             }
+        }
+    }
+
+    // ── First-run setup wizard overlay ──────────────────────────────────
+    // (Dialogs like registerDialog live on the overlay layer above this.)
+    SetupWizard {
+        id: setupWizard
+        visible: false
+        backend: backend
+        onRequestEnroll: (name) => {
+            registerDialog.modelName = name
+            registerDialog.open()
+        }
+        onWizardFinished: {
+            setupWizard.visible = false
+            backend.check_device()
+            backend.refresh_models()
         }
     }
 }

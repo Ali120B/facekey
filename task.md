@@ -23,11 +23,12 @@ backend trait so Ubuntu can plug in later.
 - [x] Build + offscreen smoke + push
 
 ## Phase 2 — QML wizard screens
-- [ ] Welcome → Preflight → Install (log view) → Camera (QtMultimedia
+- [x] Welcome → Preflight → Install (log view) → Camera (QtMultimedia
       in-app preview + IR suggestion) → Enroll (reuse flow) →
       Integrate (PAM toggles) → Done
-- [ ] Show wizard on first run (no howdy / no device), skip otherwise
-- [ ] Screenshots under Xvfb, push
+- [x] Show wizard on first run (no howdy / no device), skip otherwise
+- [x] Fixed UiSwitch programmatic-toggle recursion (busy guard, main too)
+- [x] Screenshots under Xvfb (Welcome verified), lint + push
 
 ## Phase 3 — Doctor screen
 - [ ] Reuse preflight as a permanent health page (incl. polkit-agent check)
