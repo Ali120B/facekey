@@ -200,7 +200,7 @@ Rectangle {
 
                 UiCard {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 150
+                    Layout.preferredHeight: 210
                     RowLayout {
                         Layout.fillWidth: true
                         ColumnLayout {
@@ -215,6 +215,12 @@ Rectangle {
                             enabled: !backend.install_running && !backend.install_done
                             onClicked: { backend.start_repo_install(); installPoller.start() }
                         }
+                    }
+                    ProgressBar {
+                        Layout.fillWidth: true
+                        visible: backend.install_running || backend.install_done
+                        indeterminate: backend.install_running && !backend.install_done
+                        value: backend.install_done ? 1 : 0
                     }
                     ScrollView {
                         Layout.fillWidth: true
@@ -292,7 +298,8 @@ Rectangle {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 240
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 240
                     radius: 14
                     color: "#0B0C0F"
                     border.width: 1
@@ -312,7 +319,7 @@ Rectangle {
                     VideoOutput {
                         id: previewOut
                         anchors.fill: parent
-                        fillMode: VideoOutput.PreserveAspectCrop
+                        fillMode: VideoOutput.PreserveAspectFit
                     }
                     Label {
                         anchors.centerIn: parent

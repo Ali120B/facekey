@@ -1551,11 +1551,19 @@ impl qobject::HowdyBackend {
             std::thread::spawn(move || {
                 for line in [
                     "resolving dependencies…",
-                    "installing qt6-base qt6-declarative qt6-multimedia…",
-                    "installing v4l-utils mpv polkit gcc make pkgconf fakeroot…",
-                    "done.",
+                    "looking for conflicting packages…",
+                    "Packages (9) qt6-base-6.11.2  qt6-declarative-6.11.2  qt6-multimedia-6.11.2",
+                    "           v4l-utils-1.32.0  mpv-0.41.0  polkit-127  gcc-16.2.1  make-4.4.1",
+                    "Total Download Size:   48.20 MiB",
+                    "Total Installed Size:  212.44 MiB",
+                    ":: Retrieving packages … 100%",
+                    ":: Processing package changes …",
+                    "installing qt6-base … done",
+                    "installing v4l-utils mpv polkit … done",
+                    "installing build tools (gcc/make/pkgconf/fakeroot) … done",
+                    "All system packages installed. AUR step is next: howdy + pam-python.",
                 ] {
-                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    std::thread::sleep(std::time::Duration::from_millis(700));
                     let mut prev =
                         std::fs::read_to_string("/tmp/facekey_install.log").unwrap_or_default();
                     prev.push_str(line);
