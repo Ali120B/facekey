@@ -28,6 +28,7 @@ jobs:
             qml6-module-qtquick qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtmultimedia \
             qml6-module-qtqml-workerscript qml6-module-qtquick-templates \
+            qml6-module-qtquick-window qml6-module-qtqml-models \
             xvfb \
             librsvg2-bin file wget desktop-file-utils
 
@@ -82,27 +83,10 @@ jobs:
           test -d AppDir/usr/qml/QtQuick
           test -d AppDir/usr/qml/QtQuick/Controls
           test -d AppDir/usr/qml/QtQuick/Templates
+          test -d AppDir/usr/qml/QtQuick/Window
           test -d AppDir/usr/qml/QtQml/WorkerScript
+          test -d AppDir/usr/qml/QtQml/Models
           echo "Qt payload OK"
-
-      - name: Boot the AppImage (fail on any load error)
-        run: |
-          # No more shipping blind: start the real bundle headless and
-          # abort the release if the engine cannot load. Startup needs no
-          # interaction (no Howdy on the runner, so no auth prompts).
-          xvfb-run -a ./${APPIMAGE} > appimage-smoke.log 2>&1 & APP=$!
-          for i in $(seq 1 30); do
-            sleep 1
-            grep -qiE "failed to load component|is not installed|could not load|could not find|plugin.*not found" appimage-smoke.log && break
-          done
-          sleep 5
-          kill $APP 2>/dev/null || true
-          cat appimage-smoke.log
-          if grep -qiE "failed to load component|is not installed|could not load the Qt|could not find the Qt|plugin .* not found" appimage-smoke.log; then
-            echo "SMOKE FAILED: AppImage does not start cleanly"
-            exit 1
-          fi
-          echo "SMOKE OK"
 
       - name: Rename AppImage
         run: |
@@ -111,6 +95,31 @@ jobs:
           mv "$SRC" "$DST"
           echo "APPIMAGE=$DST" >> "$GITHUB_ENV"
           ls -l "$DST"
+
+      - name: Boot the AppImage (fail on any load error)
+        run: |
+          # Start the real bundle headless. Startup needs no interaction
+          # (no Howdy on the runner, so no auth prompts can appear).
+          # The app must STAY ALIVE with a clean log: an engine that fails
+          # to load quits within seconds, which we treat as failure.
+          xvfb-run -a ./${APPIMAGE} > appimage-smoke.log 2>&1 & APP=$!
+          sleep 12
+          if ! kill -0 $APP 2>/dev/null; then
+            echo "SMOKE FAILED: AppImage exited early"
+            cat appimage-smoke.log
+            exit 1
+          fi
+          sleep 15
+          kill $APP 2>/dev/null || true
+          sleep 2
+          cat appimage-smoke.log
+          if grep -qiE "failed to load component|module .* is not installed|could not (load|find) the Qt|cannot load library" appimage-smoke.log; then
+            echo "SMOKE FAILED: AppImage does not start cleanly"
+            exit 1
+          fi
+          echo "SMOKE OK"
+
+      - name: Attach to draft release
 
       - name: Attach to draft release
         uses: softprops/action-gh-release@v2
