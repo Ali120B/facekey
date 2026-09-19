@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtMultimedia
 import com.howdy.gui
 
 ApplicationWindow {
@@ -38,6 +39,10 @@ ApplicationWindow {
     property color bad: "#FF6B6B"
     property color warn: "#FFC857"
 
+    // Inline camera preview (off by default so the device stays free
+    // for enroll/test, which need exclusive access)
+    property bool previewOn: false
+
     color: bg
 
     HowdyBackend {
@@ -47,6 +52,7 @@ ApplicationWindow {
             backend.load_video_devices()
             backend.check_pam_status()
             backend.run_preflight()
+            backend.probe_cameras()
             // First run (or broken setup) → guided wizard; it covers the
             // old standalone camera dialog, enroll and PAM wiring.
             // In --test-run the wizard always shows for walkthroughs.
@@ -56,6 +62,7 @@ ApplicationWindow {
                 backend.check_device()
                 backend.refresh_models()
             }
+            previewCombo.currentIndex = Math.max(0, backend.camera_paths.indexOf(backend.suggested_camera))
         }
     }
 
@@ -118,74 +125,6 @@ ApplicationWindow {
                     onClicked: {
                         polkitWarningDialog.close()
                         backend.toggle_pam("/etc/pam.d/polkit-1")
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Camera selection ────────────────────────────────────────────────────
-    Dialog {
-        id: cameraDialog
-        title: "Infrared camera"
-        modal: true
-        closePolicy: Popup.NoAutoClose
-        anchors.centerIn: Overlay.overlay
-        width: 500
-        background: Rectangle { color: card; radius: 14; border.width: 1; border.color: line }
-
-        ColumnLayout {
-            width: parent.width
-            spacing: 14
-
-            Label {
-                Layout.fillWidth: true
-                text: "Pick the IR device Howdy should use. Prefer a stable /dev/v4l/by-path entry."
-                font.pixelSize: 13
-                color: dim
-                wrapMode: Text.Wrap
-            }
-            ComboBox {
-                id: devicePicker
-                Layout.fillWidth: true
-                model: backend.video_devices
-            }
-            Label {
-                Layout.fillWidth: true
-                text: "No video devices found in /dev/"
-                visible: devicePicker.count === 0
-                color: dim
-                font.italic: true
-                font.pixelSize: 12
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                UiButton {
-                    text: "Preview"
-                    kind: "ghost"
-                    enabled: devicePicker.count > 0
-                    onClicked: backend.test_camera(devicePicker.currentText)
-                }
-                Item { Layout.fillWidth: true }
-                UiButton {
-                    text: "Skip"
-                    kind: "ghost"
-                    onClicked: {
-                        cameraDialog.close()
-                        backend.check_device()
-                        backend.refresh_models()
-                    }
-                }
-                UiButton {
-                    text: "Save"
-                    kind: "accent"
-                    enabled: devicePicker.count > 0
-                    onClicked: {
-                        backend.save_device_path(devicePicker.currentText)
-                        cameraDialog.close()
-                        backend.check_device()
-                        backend.refresh_models()
                     }
                 }
             }
@@ -371,11 +310,15 @@ ApplicationWindow {
         }
     }
 
-    // ── Main layout ─────────────────────────────────────────────────────────
-    ColumnLayout {
+    // ── Main layout (scrolls when the preview card expands) ───────────────
+    ScrollView {
         anchors.fill: parent
-        anchors.margins: 24
-        spacing: 14
+        contentWidth: availableWidth
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+        ColumnLayout {
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 24 }
+            spacing: 14
 
         // Header: status pill + title + version
         RowLayout {
@@ -542,6 +485,7 @@ ApplicationWindow {
                     font.pixelSize: 13
                     enabled: backend.device_supported && newModelName.text.trim() !== ""
                     onClicked: {
+                        window.previewOn = false
                         registerDialog.modelName = newModelName.text.trim()
                         newModelName.text = ""
                         registerDialog.open()
@@ -560,7 +504,10 @@ ApplicationWindow {
                 kind: "tonal"
                 font.pixelSize: 13
                 enabled: backend.device_supported
-                onClicked: backend.run_test()
+                onClicked: {
+                    window.previewOn = false
+                    backend.run_test()
+                }
             }
             UiButton {
                 Layout.fillWidth: true
@@ -571,13 +518,15 @@ ApplicationWindow {
             }
         }
 
-        // Camera card
+        // Camera card with inline live preview (collapsible so the
+        // device stays free for enroll/test, which need exclusive access)
         UiCard {
             Layout.fillWidth: true
-            Layout.preferredHeight: 76
+            Layout.preferredHeight: previewOn ? 360 : 76
+            Behavior on Layout.preferredHeight { NumberAnimation { duration: 200 } }
+
             RowLayout {
                 Layout.fillWidth: true
-                Layout.fillHeight: true
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 2
@@ -589,10 +538,62 @@ ApplicationWindow {
                     }
                 }
                 UiButton {
-                    text: "Change…"
+                    text: previewOn ? "Stop" : "Preview"
                     kind: "tonal"
                     font.pixelSize: 12
-                    onClicked: cameraDialog.open()
+                    onClicked: previewOn = !previewOn
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 180
+                visible: previewOn
+                radius: 10
+                color: "#0B0C0F"
+                border.width: 1
+                border.color: line
+                clip: true
+
+                MediaDevices { id: mgrCams }
+                Camera {
+                    id: mgrCam
+                    active: previewOn && mgrCams.videoInputs.length > 0
+                    cameraDevice: mgrCams.videoInputs.length > 0 ? mgrCams.videoInputs[previewCombo.currentIndex < mgrCams.videoInputs.length ? previewCombo.currentIndex : 0] : null
+                }
+                CaptureSession {
+                    camera: mgrCam
+                    videoOutput: mgrPreview
+                }
+                VideoOutput {
+                    id: mgrPreview
+                    anchors.fill: parent
+                    fillMode: VideoOutput.PreserveAspectFit
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                visible: previewOn
+                spacing: 8
+                ComboBox {
+                    id: previewCombo
+                    Layout.fillWidth: true
+                    model: backend.camera_candidates
+                    font.pixelSize: 12
+                }
+                UiButton {
+                    text: "Use this camera"
+                    kind: "accent"
+                    font.pixelSize: 12
+                    enabled: backend.camera_paths.length > 0
+                    onClicked: {
+                        window.previewOn = false
+                        backend.save_device_path(backend.camera_paths[previewCombo.currentIndex])
+                        backend.check_device()
+                        backend.refresh_models()
+                    }
                 }
             }
         }
@@ -787,6 +788,7 @@ ApplicationWindow {
             }
         }
     }
+    }
 
     // ── First-run setup wizard overlay ──────────────────────────────────
     // (Dialogs like registerDialog live on the overlay layer above this.)
@@ -795,6 +797,7 @@ ApplicationWindow {
         visible: false
         backend: backend
         onRequestEnroll: (name) => {
+            window.previewOn = false
             registerDialog.modelName = name
             registerDialog.open()
         }
