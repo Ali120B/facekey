@@ -120,8 +120,6 @@ jobs:
           echo "SMOKE OK"
 
       - name: Attach to draft release
-
-      - name: Attach to draft release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
