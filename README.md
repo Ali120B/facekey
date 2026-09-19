@@ -4,7 +4,9 @@ A Qt-based all-in-one setup wizard and manager for [**Howdy**](https://github.co
 
 Created and maintained by **[Ali120B](https://github.com/Ali120B)** — contact: alibashmail2010@yahoo.com
 
-![FaceKey](assets/screenshot.png)
+![FaceKey setup wizard](assets/wizard.png)
+
+![FaceKey manager](assets/manager.png)
 
 ## Installation
 
