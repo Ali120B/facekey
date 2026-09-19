@@ -27,7 +27,8 @@ jobs:
             qt6-tools-dev qt6-tools-dev-tools \
             qml6-module-qtquick qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtmultimedia \
-            qml6-module-qtqml-workerscript \
+            qml6-module-qtqml-workerscript qml6-module-qtquick-templates \
+            xvfb \
             librsvg2-bin file wget desktop-file-utils
 
       - name: Locate qmake6
@@ -80,8 +81,28 @@ jobs:
           test -f AppDir/usr/plugins/platforms/libqwayland-egl.so
           test -d AppDir/usr/qml/QtQuick
           test -d AppDir/usr/qml/QtQuick/Controls
+          test -d AppDir/usr/qml/QtQuick/Templates
           test -d AppDir/usr/qml/QtQml/WorkerScript
           echo "Qt payload OK"
+
+      - name: Boot the AppImage (fail on any load error)
+        run: |
+          # No more shipping blind: start the real bundle headless and
+          # abort the release if the engine cannot load. Startup needs no
+          # interaction (no Howdy on the runner, so no auth prompts).
+          xvfb-run -a ./${APPIMAGE} > appimage-smoke.log 2>&1 & APP=$!
+          for i in $(seq 1 30); do
+            sleep 1
+            grep -qiE "failed to load component|is not installed|could not load|could not find|plugin.*not found" appimage-smoke.log && break
+          done
+          sleep 5
+          kill $APP 2>/dev/null || true
+          cat appimage-smoke.log
+          if grep -qiE "failed to load component|is not installed|could not load the Qt|could not find the Qt|plugin .* not found" appimage-smoke.log; then
+            echo "SMOKE FAILED: AppImage does not start cleanly"
+            exit 1
+          fi
+          echo "SMOKE OK"
 
       - name: Rename AppImage
         run: |
