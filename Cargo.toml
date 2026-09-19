@@ -1,6 +1,6 @@
 [package]
 name = "facekey"
-version = "3.0.5"
+version = "3.0.6"
 edition = "2021"
 description = "FaceKey - Face ID for Linux. Qt front-end and setup wizard for Howdy face authentication"
 authors = ["Ali120B"]

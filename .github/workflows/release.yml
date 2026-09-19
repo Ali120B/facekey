@@ -66,6 +66,9 @@ jobs:
           # (bare .so names); EXTRA_QT_PLUGINS is deprecated and ignores
           # platforms/ paths.
           export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
+          # The FFmpeg camera backend is not auto-detected (nothing links it
+          # directly); without it Camera creation aborts the app.
+          export EXTRA_QT_MODULES="multimedia"
           ./linuxdeploy-x86_64.AppImage --appdir AppDir \
             -e "target/release/${APP_ID}" \
             -d "Packaging/${APP_ID}.desktop" \
@@ -86,6 +89,7 @@ jobs:
           test -d AppDir/usr/qml/QtQuick/Window
           test -d AppDir/usr/qml/QtQml/WorkerScript
           test -d AppDir/usr/qml/QtQml/Models
+          test -n "$(ls AppDir/usr/plugins/multimedia/*.so 2>/dev/null)"
           echo "Qt payload OK"
 
       - name: Rename AppImage
