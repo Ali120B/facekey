@@ -451,9 +451,7 @@ fn github_latest() -> Option<(String, String)> {
     let tag = url.rsplit("/tag/").next()?.to_string();
     let sane = tag.len() > 1
         && tag.starts_with('v')
-        && tag[1..]
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '.');
+        && tag[1..].chars().all(|c| c.is_ascii_digit() || c == '.');
     if !sane {
         return None;
     }
@@ -1167,7 +1165,14 @@ impl qobject::HowdyBackend {
         // travel as argv, never interpolated into a command string.
         let howdy_clone = howdy.clone();
         let label: String = name_str.chars().take(24).collect();
-        let user_clone = { let u = self.as_ref().face_user().to_string(); if u.trim().is_empty() { target_user() } else { u.trim().to_string() } };
+        let user_clone = {
+            let u = self.as_ref().face_user().to_string();
+            if u.trim().is_empty() {
+                target_user()
+            } else {
+                u.trim().to_string()
+            }
+        };
 
         std::thread::spawn(move || {
             // Step 1: capture. Howdy prints no usable id, so face_id stays None
@@ -2058,14 +2063,12 @@ impl qobject::HowdyBackend {
     /// before curl ever sees it.
     pub fn download_update(mut self: Pin<&mut Self>) {
         if test_run() {
-            self.as_mut().set_status_message(QString::from(
-                "Update downloaded (test mode)",
-            ));
+            self.as_mut()
+                .set_status_message(QString::from("Update downloaded (test mode)"));
             return;
         }
-        self.as_mut().set_status_message(QString::from(
-            "Downloading update — watch ~/Downloads…",
-        ));
+        self.as_mut()
+            .set_status_message(QString::from("Downloading update — watch ~/Downloads…"));
         std::thread::spawn(|| {
             let msg = match github_latest() {
                 Some((tag, url)) if update_url_ok(&url) => {
