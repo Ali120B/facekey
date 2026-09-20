@@ -426,37 +426,42 @@ fn version_newer(current: &str, latest: &str) -> bool {
     a < b
 }
 
-/// Minimal GitHub latest-release lookup without new dependencies:
-/// returns (tag, appimage_url) if both parse out of the API JSON.
+/// Latest release via the /releases/latest redirect plus the deterministic
+/// AppImage asset URL. Deliberately API-free: no token, no rate limits, no
+/// JSON parsing (and the API 404s anonymously on this repo anyway).
+/// Returns (tag, asset_url).
 fn github_latest() -> Option<(String, String)> {
     let out = Command::new("curl")
         .args([
-            "-s",
+            "-Ls",
             "--max-time",
-            "10",
-            "-H",
-            "Accept: application/vnd.github+json",
-            "https://api.github.com/Ali120B/facekey/releases/latest",
+            "15",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{url_effective}",
+            "https://github.com/Ali120B/facekey/releases/latest",
         ])
         .output()
         .ok()?;
     if !out.status.success() {
         return None;
     }
-    let body = String::from_utf8_lossy(&out.stdout);
-    let tag = body
-        .split("\"tag_name\"")
-        .nth(1)?
-        .split('"')
-        .nth(2)?
-        .to_string();
-    let url = body
-        .split("\"browser_download_url\"")
-        .skip(1)
-        .filter_map(|chunk| chunk.split('"').nth(2))
-        .find(|u| u.ends_with(".AppImage"))?
-        .to_string();
-    Some((tag, url))
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let tag = url.rsplit("/tag/").next()?.to_string();
+    let sane = tag.len() > 1
+        && tag.starts_with('v')
+        && tag[1..]
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.');
+    if !sane {
+        return None;
+    }
+    let asset = format!(
+        "https://github.com/Ali120B/facekey/releases/download/{}/facekey-{}-x86_64.AppImage",
+        tag, tag
+    );
+    Some((tag, asset))
 }
 
 /// Only release assets from our own repo may be downloaded.
