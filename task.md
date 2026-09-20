@@ -13,12 +13,13 @@ new matrix entry is verified on hardware before it ships.
   - [x] Arch path byte-identical to today (no behavior change)
   - [x] Build + smoke + push
 
-- [ ] **Phase 2 — apt install flow**
-  - [ ] Terminal-handoff `add-apt-repository ppa:boltgolt/howdy` + `apt install howdy`
-        (debconf asks Fast/Balanced/Secure → must be interactive terminal)
-  - [ ] Repo deps via pkexec apt (v4l-utils; qt deps unneeded — AppImage)
-  - [ ] No AUR/pam-python on Debian (ships compiled pam_howdy.so — verify)
-  - [ ] Preflight rows adapt per distro
+- [x] **Phase 2 — apt install flow**
+  - [x] Terminal-handoff PPA + apt (debconf stays interactive)
+  - [x] pkexec apt for repo deps (v4l-utils)
+  - [x] PAM flavor auto-detect (pam_python vs pam_howdy) in preflight + done-check
+  - [x] Preflight/Install UI adapts per distro (is_debian)
+  - [x] GDM backend (detect + toggle + experimental UI rows, HW verification pending)
+  - [x] Build + lint + smoke (both modes) + contract check + push
 
 - [ ] **Phase 3 — GDM/GNOME PAM matrix** (needs hardware)
   - [ ] Identify greeter service (gdm-password?) + lock service on Pop

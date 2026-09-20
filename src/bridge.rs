@@ -48,6 +48,10 @@ pub mod qobject {
         #[qproperty(QString, distro_id)]
         #[qproperty(QString, distro_like)]
         #[qproperty(QString, pkg_manager)]
+        #[qproperty(bool, is_debian)]
+        #[qproperty(QString, pam_module_kind)]
+        #[qproperty(bool, gdm_installed)]
+        #[qproperty(bool, pam_gdm)]
         type HowdyBackend = super::HowdyBackendRust;
 
         /// Check if device has supported IR camera
@@ -190,6 +194,10 @@ pub struct HowdyBackendRust {
     distro_id: QString,
     distro_like: QString,
     pkg_manager: QString,
+    is_debian: bool,
+    pam_module_kind: QString,
+    gdm_installed: bool,
+    pam_gdm: bool,
 }
 
 const PAM_LINE_DEBIAN: &str = "auth sufficient pam_howdy.so";
@@ -204,6 +212,9 @@ const PAM_SYSTEM_LOGIN: &str = "/etc/pam.d/system-local-login";
 const PAM_PLASMA_LM: &str = "/etc/pam.d/plasmalogin";
 const PAM_POLKIT: &str = "/etc/pam.d/polkit-1";
 const PAM_HYPRLOCK: &str = "/etc/pam.d/hyprlock";
+/// GDM greeter on Debian-family (EXPERIMENTAL — upstream greeter login is
+/// flaky, see findings.md; ships behind hardware verification)
+const PAM_GDM: &str = "/etc/pam.d/gdm-password";
 // polkit-agent-helper resolves PAM modules in a restricted sandbox; use the full path.
 const PAM_POLKIT_LINE_DEBIAN: &str = "auth sufficient /lib/security/pam_howdy.so";
 const PAM_POLKIT_LINE_ARCH: &str = "auth sufficient pam_python.so /lib/security/howdy/pam.py";
@@ -386,7 +397,7 @@ fn pacman_installed(pkg: &str) -> bool {
 // ── Setup wizard helpers (Arch backend; see task.md install plan) ──
 
 /// Repo packages FaceKey needs from pacman
-const REPO_PACKAGES: &[&str] = &[
+const REPO_PACKAGES_ARCH: &[&str] = &[
     "qt6-base",
     "qt6-declarative",
     "qt6-multimedia",
@@ -398,6 +409,10 @@ const REPO_PACKAGES: &[&str] = &[
     "pkgconf",
     "fakeroot",
 ];
+
+/// Repo packages on Debian-family (Qt ships inside the AppImage;
+/// AUR/toolchain concepts do not apply — .debs are prebuilt)
+const REPO_PACKAGES_DEBIAN: &[&str] = &["v4l-utils"];
 
 /// dlib model files that must ship inside the howdy package
 const DLIB_MODELS: &[&str] = &[
@@ -426,6 +441,23 @@ fn which_first(candidates: &[&str]) -> Option<String> {
 fn pam_python_present() -> bool {
     Path::new("/usr/lib/security/pam_python.so").exists()
         || Path::new("/lib/security/pam_python.so").exists()
+}
+
+fn pam_howdy_present() -> bool {
+    Path::new("/usr/lib/security/pam_howdy.so").exists()
+        || Path::new("/lib/security/pam_howdy.so").exists()
+}
+
+/// Which PAM module flavor is installed, if any. Arch ships pam_python;
+/// Debian-family ships the compiled pam_howdy.so. Empty = none.
+fn pam_module_kind() -> &'static str {
+    if pam_python_present() {
+        "pam_python"
+    } else if pam_howdy_present() {
+        "pam_howdy"
+    } else {
+        ""
+    }
 }
 
 fn dlib_models_present() -> bool {
@@ -535,6 +567,7 @@ fn pam_managed(path: &str) -> bool {
         PAM_PLASMA_LM,
         PAM_POLKIT,
         PAM_HYPRLOCK,
+        PAM_GDM,
     ]
     .contains(&path)
 }
@@ -551,6 +584,22 @@ struct DistroInfo {
     id: String,
     like: String,
     pkg_manager: &'static str,
+}
+
+impl DistroInfo {
+    /// "arch" for pacman systems, "debian" for apt systems, else "unknown".
+    /// Phase 2+: installer backend branches on this, never on raw ids.
+    fn family(&self) -> &'static str {
+        match self.pkg_manager {
+            "pacman" => "arch",
+            "apt" => "debian",
+            _ => "unknown",
+        }
+    }
+
+    fn is_debian(&self) -> bool {
+        self.family() == "debian"
+    }
 }
 
 /// Parse /etc/os-release and pick the package manager family.
@@ -581,15 +630,26 @@ fn detect_distro() -> DistroInfo {
     let haystack = format!("{} {}", id, like);
     let pkg_manager = if haystack.split_whitespace().any(|w| w == "arch") {
         "pacman"
-    } else if ["debian", "ubuntu", "pop", "linuxmint", "zorin", "elementary"]
-        .iter()
-        .any(|w| haystack.split_whitespace().any(|t| t == *w))
+    } else if [
+        "debian",
+        "ubuntu",
+        "pop",
+        "linuxmint",
+        "zorin",
+        "elementary",
+    ]
+    .iter()
+    .any(|w| haystack.split_whitespace().any(|t| t == *w))
     {
         "apt"
     } else {
         "unknown"
     };
-    DistroInfo { id, like, pkg_manager }
+    DistroInfo {
+        id,
+        like,
+        pkg_manager,
+    }
 }
 
 /// Sorted /dev/video* nodes
@@ -669,7 +729,8 @@ impl qobject::HowdyBackend {
         self.as_mut().set_sddm_installed(sddm);
         self.as_mut().set_plasma_lm_installed(plm);
 
-        // Neither detected → fall back to showing SDDM (most common on Arch)
+        // Neither detected → fall back to showing SDDM (most common on Arch).
+        // On Debian-family the GDM row below is the one that matters.
         if !sddm && !plm {
             self.as_mut().set_sddm_installed(true);
         }
@@ -677,6 +738,13 @@ impl qobject::HowdyBackend {
         // Screen locker actually in use on Hyprland setups
         let hyprlock = Path::new("/usr/bin/hyprlock").exists() || pacman_installed("hyprlock");
         self.as_mut().set_hyprlock_installed(hyprlock);
+
+        // GDM greeter (Debian-family default). Binary lives in sbin there.
+        let gdm = Path::new("/usr/bin/gdm3").exists()
+            || Path::new("/usr/sbin/gdm3").exists()
+            || Path::new("/usr/bin/gdm").exists()
+            || which_first(&["gdm3", "gdm"]).is_some();
+        self.as_mut().set_gdm_installed(gdm);
     }
 
     /// Check if device has a supported IR camera for howdy
@@ -1392,6 +1460,7 @@ impl qobject::HowdyBackend {
         self.as_mut().set_pam_plasma_lm(read(PAM_PLASMA_LM));
         self.as_mut().set_pam_polkit(read(PAM_POLKIT));
         self.as_mut().set_pam_hyprlock(read(PAM_HYPRLOCK));
+        self.as_mut().set_pam_gdm(read(PAM_GDM));
     }
 
     /// Toggle the howdy line in the given PAM file path:
@@ -1431,6 +1500,11 @@ impl qobject::HowdyBackend {
                 PAM_HYPRLOCK => {
                     let cur = *self.as_ref().pam_hyprlock();
                     self.as_mut().set_pam_hyprlock(!cur);
+                    !cur
+                }
+                PAM_GDM => {
+                    let cur = *self.as_ref().pam_gdm();
+                    self.as_mut().set_pam_gdm(!cur);
                     !cur
                 }
                 _ if file_path.as_str() == PAM_POLKIT => {
@@ -1687,6 +1761,7 @@ impl qobject::HowdyBackend {
                     PAM_KDE => self.as_mut().set_pam_kde(new_state),
                     PAM_SUDO => self.as_mut().set_pam_sudo(new_state),
                     PAM_HYPRLOCK => self.as_mut().set_pam_hyprlock(new_state),
+                    PAM_GDM => self.as_mut().set_pam_gdm(new_state),
                     PAM_SYSTEM_LOGIN => self.as_mut().set_pam_system_login(new_state),
                     PAM_PLASMA_LM => self.as_mut().set_pam_plasma_lm(new_state),
                     _ => {}
@@ -1780,8 +1855,8 @@ impl qobject::HowdyBackend {
         let d = detect_distro();
         self.as_mut().set_distro_id(QString::from(&d.id));
         self.as_mut().set_distro_like(QString::from(&d.like));
-        self.as_mut()
-            .set_pkg_manager(QString::from(d.pkg_manager));
+        self.as_mut().set_pkg_manager(QString::from(d.pkg_manager));
+        self.as_mut().set_is_debian(d.is_debian());
     }
 
     /// Run all setup preflight checks
@@ -1798,15 +1873,27 @@ impl qobject::HowdyBackend {
             return;
         }
         self.as_mut().set_setup_howdy(find_howdy().is_some());
-        self.as_mut().set_setup_pam_python(pam_python_present());
+        // Any usable PAM flavor counts (pam_python on Arch, pam_howdy on Debian)
+        let kind = pam_module_kind();
+        self.as_mut().set_setup_pam_python(!kind.is_empty());
+        self.as_mut().set_pam_module_kind(QString::from(kind));
         self.as_mut().set_setup_models(dlib_models_present());
-        self.as_mut().set_setup_toolchain(
-            ["gcc", "make", "pkgconf", "fakeroot"]
-                .iter()
-                .all(|p| which_first(&[*p]).is_some()),
-        );
-        let helper = which_first(&["yay", "paru"]).unwrap_or_default();
-        self.as_mut().set_setup_aur_helper(QString::from(&helper));
+        let debian = detect_distro().is_debian();
+        self.as_mut().set_is_debian(debian);
+        if debian {
+            // .debs are prebuilt: no toolchain or AUR helper concept.
+            self.as_mut().set_setup_toolchain(true);
+            self.as_mut()
+                .set_setup_aur_helper(QString::from("apt (native)"));
+        } else {
+            self.as_mut().set_setup_toolchain(
+                ["gcc", "make", "pkgconf", "fakeroot"]
+                    .iter()
+                    .all(|p| which_first(&[*p]).is_some()),
+            );
+            let helper = which_first(&["yay", "paru"]).unwrap_or_default();
+            self.as_mut().set_setup_aur_helper(QString::from(&helper));
+        }
         self.as_mut().set_setup_agent(polkit_agent_running());
         let mut ir = false;
         for d in list_video_devices() {
@@ -1921,10 +2008,28 @@ impl qobject::HowdyBackend {
                 "/tmp/facekey_install.log",
                 "FaceKey system-package install\n",
             );
-            let pkgs = REPO_PACKAGES.join(" ");
+            let debian = detect_distro().is_debian();
+            let pkgs = if debian {
+                REPO_PACKAGES_DEBIAN.join(" ")
+            } else {
+                REPO_PACKAGES_ARCH.join(" ")
+            };
+            let install_cmd = if debian {
+                // No --needed equivalent; -y answers yes. DEBIAN_FRONTEND is
+                // left alone so debconf still prompts if it must.
+                format!(
+                    "apt-get update >> /tmp/facekey_install.log 2>&1 && apt-get install -y {} >> /tmp/facekey_install.log 2>&1",
+                    pkgs
+                )
+            } else {
+                format!(
+                    "pacman -S --needed --noconfirm {} >> /tmp/facekey_install.log 2>&1",
+                    pkgs
+                )
+            };
             let script = format!(
-                "pacman -S --needed --noconfirm {} >> /tmp/facekey_install.log 2>&1; code=$?; chmod 644 /tmp/facekey_install.log; echo $code > /tmp/facekey_install_done; exit $code",
-                pkgs
+                "{}; code=$?; chmod 644 /tmp/facekey_install.log; echo $code > /tmp/facekey_install_done; exit $code",
+                install_cmd
             );
             let _ = Command::new("pkexec")
                 .args(["/usr/bin/bash", "-c", &script])
@@ -1974,8 +2079,11 @@ impl qobject::HowdyBackend {
         false
     }
 
-    /// Open a user terminal running the AUR install (yay refuses root,
-    /// so this runs unelevated and yay asks for sudo itself)
+    /// Open a user terminal running the engine install.
+    /// Arch: yay/paru build howdy + pam-python from the AUR (helpers refuse
+    /// root, so this runs unelevated and yay asks for sudo itself).
+    /// Debian-family: PPA + apt (the .deb debconf prompt for the certainty
+    /// profile is interactive, so this also needs a real terminal).
     pub fn launch_aur_install(mut self: Pin<&mut Self>) {
         if test_run() {
             self.as_mut().set_install_error(QString::from(""));
@@ -1984,16 +2092,27 @@ impl qobject::HowdyBackend {
             ));
             return;
         }
-        let helper = match which_first(&["yay", "paru"]) {
-            Some(h) => h,
-            None => {
-                self.as_mut().set_install_error(QString::from(
-                    "No AUR helper found (install yay or paru first)",
-                ));
-                return;
-            }
+        let debian = detect_distro().is_debian();
+        let inner = if debian {
+            "echo 'FaceKey: adding the Howdy PPA and installing (it will ask for the Fast/Balanced/Secure profile)'; sudo add-apt-repository -y ppa:boltgolt/howdy && sudo apt-get update && sudo apt-get install -y howdy".to_string()
+        } else {
+            let helper = match which_first(&["yay", "paru"]) {
+                Some(h) => h,
+                None => {
+                    self.as_mut().set_install_error(QString::from(
+                        "No AUR helper found (install yay or paru first)",
+                    ));
+                    return;
+                }
+            };
+            let helper_base = helper.rsplit('/').next().unwrap_or(&helper).to_string();
+            // NOTE: python-dlib compiles from source here — honest 20-60 min
+            // on fresh machines. The terminal stays open so the log is visible.
+            format!(
+                "echo 'FaceKey: installing howdy + pam-python (dlib compile takes a while, leave it running)'; {} -S --needed --noconfirm howdy pam-python",
+                helper_base
+            )
         };
-        let helper_base = helper.rsplit('/').next().unwrap_or(&helper).to_string();
         let term = match which_first(&["foot", "kitty", "konsole", "gnome-terminal", "xterm"]) {
             Some(t) => t,
             None => {
@@ -2005,8 +2124,8 @@ impl qobject::HowdyBackend {
         // NOTE: python-dlib compiles from source here — honest 20-60 min
         // on fresh machines. The terminal stays open so the log is visible.
         let script = format!(
-            "echo 'FaceKey: installing howdy + pam-python (dlib compile takes a while, leave it running)'; {} -S --needed --noconfirm howdy pam-python; echo; echo '--- FaceKey: close this window when finished, then press Continue ---'; read _",
-            helper_base
+            "{}; echo; echo '--- FaceKey: close this window when finished, then press Continue ---'; read _",
+            inner
         );
         let mut cmd = Command::new(&term);
         let term_base = term.rsplit('/').next().unwrap_or(&term);
@@ -2029,12 +2148,12 @@ impl qobject::HowdyBackend {
         }
     }
 
-    /// True when howdy + pam-python are both present (refreshes preflight)
+    /// True when howdy + a PAM module are both present (refreshes preflight)
     pub fn check_install_done(mut self: Pin<&mut Self>) -> bool {
         if test_run() {
             return true;
         }
-        let done = find_howdy().is_some() && pam_python_present();
+        let done = find_howdy().is_some() && !pam_module_kind().is_empty();
         if done {
             self.as_mut().set_setup_howdy(true);
             self.as_mut().set_setup_pam_python(true);

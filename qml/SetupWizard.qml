@@ -173,10 +173,10 @@ Rectangle {
                         interactive: false
                         model: [
                             wizard.checkRow(backend.setup_howdy, "Howdy face engine", backend.setup_howdy ? "installed" : "missing — installed in the next step"),
-                            wizard.checkRow(backend.setup_pam_python, "PAM module (pam-python)", backend.setup_pam_python ? "installed" : "missing — installed in the next step"),
+                            wizard.checkRow(backend.setup_pam_python, "PAM module", backend.setup_pam_python ? backend.pam_module_kind + " present" : "missing — installed in the next step"),
                             wizard.checkRow(backend.setup_models, "AI face models", backend.setup_models ? "on disk" : "missing"),
-                            wizard.checkRow(backend.setup_toolchain, "Build tools (gcc/make/pkgconf/fakeroot)", backend.setup_toolchain ? "ready for AUR builds" : "missing — installed in the next step"),
-                            wizard.checkRow(backend.setup_aur_helper !== "", "AUR helper", backend.setup_aur_helper !== "" ? backend.setup_aur_helper : "none found (need yay or paru)"),
+                            wizard.checkRow(backend.setup_toolchain, backend.is_debian ? "Build tools" : "Build tools (gcc/make/pkgconf/fakeroot)", backend.is_debian ? "prebuilt .debs — nothing to compile" : backend.setup_toolchain ? "ready for AUR builds" : "missing — installed in the next step"),
+                            wizard.checkRow(backend.setup_aur_helper !== "", backend.is_debian ? "Package source" : "AUR helper", backend.is_debian ? "PPA + apt (native)" : backend.setup_aur_helper !== "" ? backend.setup_aur_helper : "none found (need yay or paru)"),
                             wizard.checkRow(backend.setup_agent, "Polkit agent", backend.setup_agent ? "running" : "not running — password popups fall back to terminal"),
                             wizard.checkRow(backend.setup_ir_camera, "IR camera", backend.setup_ir_camera ? "detected" : "none detected yet")
                         ]
@@ -216,7 +216,9 @@ Rectangle {
                     wrapMode: Text.Wrap
                     font.pixelSize: 13
                     color: dim
-                    text: "Step 1 installs system packages (one password popup).\nStep 2 opens a terminal for the AUR builds — yay asks for sudo there itself.\nHonest warning: python-dlib compiles from source, budget 20–60 minutes."
+                    text: backend.is_debian
+                        ? "Step 1 installs system packages (one password popup).\nStep 2 opens a terminal for the PPA install — it asks which profile (Fast/Balanced/Secure), answer there."
+                        : "Step 1 installs system packages (one password popup).\nStep 2 opens a terminal for the AUR builds — yay asks for sudo there itself.\nHonest warning: python-dlib compiles from source, budget 20–60 minutes."
                 }
 
                 UiCard {
@@ -228,7 +230,7 @@ Rectangle {
                             Layout.fillWidth: true
                             spacing: 1
                             Label { text: "System packages"; font.pixelSize: 13; font.bold: true; color: ink }
-                            Label { text: "qt6, v4l-utils, mpv, polkit, build tools"; font.pixelSize: 11; color: dim }
+                            Label { text: backend.is_debian ? "v4l-utils (camera tools)" : "qt6, v4l-utils, mpv, polkit, build tools"; font.pixelSize: 11; color: dim }
                         }
                         UiButton {
                             text: backend.install_failed ? "Retry" : backend.install_done ? "Done ✓" : "Install"
@@ -274,7 +276,7 @@ Rectangle {
                         ColumnLayout {
                             Layout.fillWidth: true
                             spacing: 1
-                            Label { text: "Howdy + PAM module (AUR)"; font.pixelSize: 13; font.bold: true; color: ink }
+                            Label { text: backend.is_debian ? "Howdy (PPA)" : "Howdy + PAM module (AUR)"; font.pixelSize: 13; font.bold: true; color: ink }
                             Label { text: "Opens a terminal — type your sudo password there when asked"; font.pixelSize: 11; color: dim; wrapMode: Text.Wrap; Layout.fillWidth: true }
                         }
                         UiButton { text: "Open terminal installer"; kind: "tonal"; onClicked: backend.launch_aur_install() }
@@ -488,6 +490,17 @@ Rectangle {
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 12
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: backend.gdm_installed
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 0
+                                Label { text: "Login screen (GDM)"; font.pixelSize: 13; font.bold: true; color: ink }
+                                Label { text: "experimental — needs hardware proof"; font.pixelSize: 11; color: warn }
+                            }
+                            UiSwitch { checked: backend.pam_gdm; onToggled: backend.toggle_pam("/etc/pam.d/gdm-password") }
+                        }
                         RowLayout {
                             Layout.fillWidth: true
                             visible: backend.sddm_installed
