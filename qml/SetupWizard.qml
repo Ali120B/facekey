@@ -177,7 +177,7 @@ Rectangle {
                             wizard.checkRow(backend.setup_models, "AI face models", backend.setup_models ? "on disk" : "missing"),
                             wizard.checkRow(backend.setup_toolchain, backend.is_debian ? "Build tools" : "Build tools (gcc/make/pkgconf/fakeroot)", backend.is_debian ? "prebuilt .debs — nothing to compile" : backend.setup_toolchain ? "ready for AUR builds" : "missing — installed in the next step"),
                             wizard.checkRow(backend.setup_aur_helper !== "", backend.is_debian ? "Package source" : "AUR helper", backend.is_debian ? "PPA + apt (native)" : backend.setup_aur_helper !== "" ? backend.setup_aur_helper : "none found (need yay or paru)"),
-                            wizard.checkRow(backend.setup_agent, "Polkit agent", backend.setup_agent ? "running" : "not running — password popups fall back to terminal"),
+                            wizard.checkRow(backend.setup_agent, "Polkit agent", backend.setup_agent ? "running" : backend.desktop_id !== "" && backend.desktop_id !== "unknown" ? "not running under " + backend.desktop_id + " — popups fall back to terminal" : "not running — password popups fall back to terminal"),
                             wizard.checkRow(backend.setup_ir_camera, "IR camera", backend.setup_ir_camera ? "detected" : "none — a normal webcam works too (needs light)"),
                         ]
                         delegate: RowLayout {

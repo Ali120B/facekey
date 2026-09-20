@@ -816,7 +816,7 @@ ApplicationWindow {
                     { ok: backend.setup_howdy, title: "Howdy face engine", sub: backend.setup_howdy ? "installed" : "missing — re-run setup below" },
                     { ok: backend.setup_pam_python, title: "PAM module", sub: backend.setup_pam_python ? "pam_python.so present" : "missing — face auth cannot engage" },
                     { ok: backend.setup_models, title: "AI models", sub: backend.setup_models ? "dlib data on disk" : "missing" },
-                    { ok: backend.setup_agent, title: "Polkit agent", sub: backend.setup_agent ? "running" : "not running — dialogs fall back to terminal" },
+                    { ok: backend.setup_agent, title: "Polkit agent", sub: backend.setup_agent ? "running" : backend.desktop_id !== "" && backend.desktop_id !== "unknown" ? "not running under " + backend.desktop_id + " — popups fall back to terminal" : "not running — dialogs fall back to terminal" },
                     { ok: backend.setup_ir_camera, title: "IR camera", sub: backend.setup_ir_camera ? "detected" : "none — a normal webcam works too" },
                     { ok: backend.camera_configured, title: "Camera configured", sub: backend.camera_configured ? "device_path is set" : "not set" }
                 ]

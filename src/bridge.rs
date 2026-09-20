@@ -52,6 +52,7 @@ pub mod qobject {
         #[qproperty(QString, pam_module_kind)]
         #[qproperty(bool, gdm_installed)]
         #[qproperty(bool, pam_gdm)]
+        #[qproperty(QString, desktop_id)]
         type HowdyBackend = super::HowdyBackendRust;
 
         /// Check if device has supported IR camera
@@ -198,6 +199,7 @@ pub struct HowdyBackendRust {
     pam_module_kind: QString,
     gdm_installed: bool,
     pam_gdm: bool,
+    desktop_id: QString,
 }
 
 const PAM_LINE_DEBIAN: &str = "auth sufficient pam_howdy.so";
@@ -1857,6 +1859,11 @@ impl qobject::HowdyBackend {
         self.as_mut().set_distro_like(QString::from(&d.like));
         self.as_mut().set_pkg_manager(QString::from(d.pkg_manager));
         self.as_mut().set_is_debian(d.is_debian());
+        // Desktop session id (COSMIC/GNOME/KDE/…) for environment hints.
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP")
+            .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
+            .unwrap_or_else(|_| "unknown".into());
+        self.as_mut().set_desktop_id(QString::from(&desktop));
     }
 
     /// Run all setup preflight checks

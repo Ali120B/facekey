@@ -71,6 +71,12 @@ fn main() {
         eprintln!("FaceKey: EGL unavailable, falling back to XCB");
         std::env::set_var("QT_QPA_PLATFORM", "xcb");
     }
+    eprintln!(
+        "FaceKey: platform={} EGL={} test_run={}",
+        std::env::var("QT_QPA_PLATFORM").unwrap_or_else(|_| "(Qt default)".into()),
+        if egl_works() { "ok" } else { "unavailable" },
+        std::env::var("FACEKEY_TEST_RUN").unwrap_or_default(),
+    );
 
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
