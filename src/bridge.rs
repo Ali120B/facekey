@@ -51,6 +51,10 @@ pub mod qobject {
         #[qproperty(bool, is_debian)]
         #[qproperty(QString, pam_module_kind)]
         #[qproperty(QString, desktop_id)]
+        // ── Recognition tuning (Howdy config) ──
+        #[qproperty(i32, tune_timeout)]
+        #[qproperty(f64, tune_certainty)]
+        #[qproperty(f64, tune_dark_threshold)]
         type HowdyBackend = super::HowdyBackendRust;
 
         /// Check if device has supported IR camera
@@ -146,6 +150,14 @@ pub mod qobject {
         /// (sets distro_id/distro_like/pkg_manager)
         #[qinvokable]
         fn detect_distro_info(self: Pin<&mut HowdyBackend>);
+
+        /// Load recognition tuning values from howdy config.ini
+        #[qinvokable]
+        fn load_tuning(self: Pin<&mut HowdyBackend>);
+
+        /// Save recognition tuning values (pkexec, staged + backed up)
+        #[qinvokable]
+        fn save_tuning(self: Pin<&mut HowdyBackend>, timeout: i32, certainty: f64, dark: f64);
     }
 }
 
@@ -196,6 +208,9 @@ pub struct HowdyBackendRust {
     is_debian: bool,
     pam_module_kind: QString,
     desktop_id: QString,
+    tune_timeout: i32,
+    tune_certainty: f64,
+    tune_dark_threshold: f64,
 }
 
 const PAM_LINE_DEBIAN: &str = "auth sufficient pam_howdy.so";
@@ -1838,6 +1853,167 @@ impl qobject::HowdyBackend {
             .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
             .unwrap_or_else(|_| "unknown".into());
         self.as_mut().set_desktop_id(QString::from(&desktop));
+    }
+
+    /// Parse a float config value with fallback (skips comments)
+    fn tune_value(content: &str, key: &str, fallback: f64) -> f64 {
+        for line in content.lines() {
+            let t = line.trim();
+            if t.starts_with('#') {
+                continue;
+            }
+            if let Some(rest) = t.strip_prefix(key) {
+                let rest = rest.trim();
+                if rest.starts_with('=') {
+                    if let Ok(v) = rest[1..].trim().parse::<f64>() {
+                        return v;
+                    }
+                }
+            }
+        }
+        fallback
+    }
+
+    /// Load recognition tuning values from howdy config.ini
+    pub fn load_tuning(mut self: Pin<&mut Self>) {
+        let mut timeout = 4;
+        let mut certainty = 3.5;
+        let mut dark = 50.0;
+        for candidate in [
+            "/usr/lib/security/howdy/config.ini",
+            "/lib/security/howdy/config.ini",
+            "/etc/howdy/config.ini",
+        ] {
+            if let Some(content) = read_file_privileged_fallback(candidate) {
+                timeout = Self::tune_value(&content, "timeout", 4.0) as i32;
+                certainty = Self::tune_value(&content, "certainty", 3.5);
+                dark = Self::tune_value(&content, "dark_threshold", 50.0);
+                break;
+            }
+        }
+        self.as_mut().set_tune_timeout(timeout);
+        self.as_mut().set_tune_certainty(certainty);
+        self.as_mut().set_tune_dark_threshold(dark);
+    }
+
+    /// Save recognition tuning values (staged + backed up + pkexec)
+    pub fn save_tuning(mut self: Pin<&mut Self>, timeout: i32, certainty: f64, dark: f64) {
+        if test_run() {
+            self.as_mut().set_tune_timeout(timeout);
+            self.as_mut().set_tune_certainty(certainty);
+            self.as_mut().set_tune_dark_threshold(dark);
+            self.as_mut()
+                .set_status_message(QString::from("Recognition tuning saved (test mode)"));
+            return;
+        }
+        let timeout = timeout.clamp(1, 30);
+        let certainty = certainty.clamp(1.0, 10.0);
+        let dark = dark.clamp(0.0, 100.0);
+
+        let config_candidates = [
+            "/usr/lib/security/howdy/config.ini",
+            "/lib/security/howdy/config.ini",
+            "/etc/howdy/config.ini",
+        ];
+        let mut config_path: Option<&str> = None;
+        let mut current_content = String::new();
+        for candidate in &config_candidates {
+            if Path::new(candidate).exists() {
+                if let Some(content) = read_file_privileged_fallback(candidate) {
+                    current_content = content;
+                    config_path = Some(candidate);
+                    break;
+                }
+            }
+        }
+        let config_path = match config_path {
+            Some(p) => p,
+            None => {
+                self.as_mut()
+                    .set_status_message(QString::from("Howdy config not found"));
+                return;
+            }
+        };
+
+        let mut out = String::new();
+        // Rewrite each key in its own pass so replacements never collide.
+        let mut pass1 = String::new();
+        for line in current_content.lines() {
+            let t = line.trim();
+            if !t.starts_with('#') && t.starts_with("timeout") && t.contains('=') {
+                pass1.push_str(&format!("timeout = {}\n", timeout));
+            } else {
+                pass1.push_str(line);
+                pass1.push('\n');
+            }
+        }
+        let mut pass2 = String::new();
+        for line in pass1.lines() {
+            let t = line.trim();
+            if !t.starts_with('#') && t.starts_with("certainty") && t.contains('=') {
+                pass2.push_str(&format!("certainty = {}\n", certainty));
+            } else {
+                pass2.push_str(line);
+                pass2.push('\n');
+            }
+        }
+        for line in pass2.lines() {
+            let t = line.trim();
+            if !t.starts_with('#') && t.starts_with("dark_threshold") && t.contains('=') {
+                out.push_str(&format!("dark_threshold = {}\n", dark));
+            } else {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        let has = |key: &str| {
+            current_content.lines().any(|l| {
+                let t = l.trim();
+                !t.starts_with('#') && t.starts_with(key) && t.contains('=')
+            })
+        };
+        if !has("timeout") {
+            out.push_str(&format!("timeout = {}\n", timeout));
+        }
+        if !has("certainty") {
+            out.push_str(&format!("certainty = {}\n", certainty));
+        }
+        if !has("dark_threshold") {
+            out.push_str(&format!("dark_threshold = {}\n", dark));
+        }
+
+        let Some(staged) = stage_file("howdy-tuning", &out) else {
+            self.as_mut()
+                .set_status_message(QString::from("Failed to stage config file"));
+            return;
+        };
+        backup_file(config_path, &current_content);
+        let output = Command::new("pkexec")
+            .args(["/usr/bin/cp"])
+            .arg(&staged)
+            .arg(config_path)
+            .output();
+        let _ = fs::remove_file(&staged);
+        match output {
+            Ok(o) if o.status.success() => {
+                self.as_mut().set_tune_timeout(timeout);
+                self.as_mut().set_tune_certainty(certainty);
+                self.as_mut().set_tune_dark_threshold(dark);
+                self.as_mut()
+                    .set_status_message(QString::from("Recognition tuning saved"));
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                self.as_mut().set_status_message(QString::from(&format!(
+                    "Failed to save tuning: {}",
+                    stderr
+                )));
+            }
+            Err(e) => {
+                self.as_mut()
+                    .set_status_message(QString::from(&format!("Error: {}", e)));
+            }
+        }
     }
 
     /// Run all setup preflight checks

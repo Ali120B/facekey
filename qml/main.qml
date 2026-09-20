@@ -73,6 +73,7 @@ ApplicationWindow {
             backend.check_pam_status()
             backend.run_preflight()
             backend.detect_distro_info()
+            backend.load_tuning()
             backend.probe_cameras()
             // First run (or broken setup) → guided wizard; it covers the
             // old standalone camera dialog, enroll and PAM wiring.
@@ -667,6 +668,78 @@ ApplicationWindow {
                         backend.check_device()
                         backend.refresh_models()
                     }
+                }
+            }
+        }
+
+        // Recognition tuning card
+        UiCard {
+            Layout.fillWidth: true
+
+            Label { text: "Recognition tuning"; font.pixelSize: 15; font.bold: true; color: ink }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: "Face timeout"; font.pixelSize: 13; font.bold: true; color: ink }
+                    Item { Layout.fillWidth: true }
+                    Label { text: timeoutSlider.value + " s"; font.pixelSize: 12; color: dim }
+                }
+                Slider {
+                    id: timeoutSlider
+                    Layout.fillWidth: true
+                    from: 1; to: 10; stepSize: 1
+                    value: backend.tune_timeout
+                }
+                Label { text: "How long each attempt looks for your face"; font.pixelSize: 11; color: dim }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: "Strictness"; font.pixelSize: 13; font.bold: true; color: ink }
+                    Item { Layout.fillWidth: true }
+                    Label { text: certSlider.value.toFixed(1); font.pixelSize: 12; color: dim }
+                }
+                Slider {
+                    id: certSlider
+                    Layout.fillWidth: true
+                    from: 1.5; to: 5; stepSize: 0.1
+                    value: backend.tune_certainty
+                }
+                Label { text: "Lower matches easier (above 5 not recommended)"; font.pixelSize: 11; color: dim }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: "Dark-frame filter"; font.pixelSize: 13; font.bold: true; color: ink }
+                    Item { Layout.fillWidth: true }
+                    Label { text: Math.round(darkSlider.value) + " %"; font.pixelSize: 12; color: dim }
+                }
+                Slider {
+                    id: darkSlider
+                    Layout.fillWidth: true
+                    from: 0; to: 100; stepSize: 1
+                    value: backend.tune_dark_threshold
+                }
+                Label { text: "Skips unlit frames from flashing IR emitters"; font.pixelSize: 11; color: dim }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                UiButton {
+                    text: "Apply tuning"
+                    kind: "accent"
+                    font.pixelSize: 12
+                    onClicked: backend.save_tuning(Math.round(timeoutSlider.value), certSlider.value, darkSlider.value)
                 }
             }
         }
