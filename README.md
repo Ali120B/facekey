@@ -104,4 +104,4 @@ cargo run
    - Toggle Howdy on or off system-wide using the Enable/Disable button
 
 ## Credits: 
-  - [xerolinux](https://github.com/xerolinux/xero-howdy-qt)
+  - [xerolinux](https://github.com/xerolinux/) : for the original inspiration [*xero-howdy-qt*](https://github.com/xerolinux/xero-howdy-qt)
