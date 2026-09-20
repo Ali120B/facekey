@@ -44,6 +44,10 @@ pub mod qobject {
         #[qproperty(bool, install_done)]
         #[qproperty(bool, install_failed)]
         #[qproperty(QString, install_error)]
+        // ── Distro backend (task.md Phase 1) ──
+        #[qproperty(QString, distro_id)]
+        #[qproperty(QString, distro_like)]
+        #[qproperty(QString, pkg_manager)]
         type HowdyBackend = super::HowdyBackendRust;
 
         /// Check if device has supported IR camera
@@ -134,6 +138,11 @@ pub mod qobject {
         /// True when running with --test-run (all responses simulated)
         #[qinvokable]
         fn is_test_run(self: Pin<&mut HowdyBackend>) -> bool;
+
+        /// Detect the distro family for the installer backend
+        /// (sets distro_id/distro_like/pkg_manager)
+        #[qinvokable]
+        fn detect_distro_info(self: Pin<&mut HowdyBackend>);
     }
 }
 
@@ -178,6 +187,9 @@ pub struct HowdyBackendRust {
     install_done: bool,
     install_failed: bool,
     install_error: QString,
+    distro_id: QString,
+    distro_like: QString,
+    pkg_manager: QString,
 }
 
 const PAM_LINE_DEBIAN: &str = "auth sufficient pam_howdy.so";
@@ -532,6 +544,52 @@ fn is_plain_file(path: &str) -> bool {
     std::fs::symlink_metadata(path)
         .map(|m| m.is_file() && !m.file_type().is_symlink())
         .unwrap_or(false)
+}
+
+/// Distro identity parsed from /etc/os-release
+struct DistroInfo {
+    id: String,
+    like: String,
+    pkg_manager: &'static str,
+}
+
+/// Parse /etc/os-release and pick the package manager family.
+/// Arch-based (incl. CachyOS) → pacman; Debian-family (debian, ubuntu,
+/// pop, linuxmint, …) → apt; anything else → unknown. Pure detection —
+/// no behavior branches on it yet (Phase 2 wires the apt backend).
+fn detect_distro() -> DistroInfo {
+    let mut id = String::new();
+    let mut like = String::new();
+    if let Ok(content) = fs::read_to_string("/etc/os-release") {
+        for line in content.lines() {
+            let line = line.trim();
+            if let Some(v) = line.strip_prefix("ID=") {
+                id = v.trim().trim_matches('"').to_lowercase();
+            } else if let Some(v) = line.strip_prefix("ID_LIKE=") {
+                like = v.trim().trim_matches('"').to_lowercase();
+            }
+        }
+    }
+    // Fall back to uname-based guess when os-release is missing
+    if id.is_empty() {
+        if which_first(&["pacman"]).is_some() {
+            id = "arch".to_string();
+        } else if which_first(&["apt-get", "apt"]).is_some() {
+            id = "debian".to_string();
+        }
+    }
+    let haystack = format!("{} {}", id, like);
+    let pkg_manager = if haystack.split_whitespace().any(|w| w == "arch") {
+        "pacman"
+    } else if ["debian", "ubuntu", "pop", "linuxmint", "zorin", "elementary"]
+        .iter()
+        .any(|w| haystack.split_whitespace().any(|t| t == *w))
+    {
+        "apt"
+    } else {
+        "unknown"
+    };
+    DistroInfo { id, like, pkg_manager }
 }
 
 /// Sorted /dev/video* nodes
@@ -1714,6 +1772,16 @@ impl qobject::HowdyBackend {
     pub fn is_test_run(self: Pin<&mut Self>) -> bool {
         let _ = self;
         test_run()
+    }
+
+    /// Detect the distro family for the installer backend.
+    /// Read-only (/etc/os-release); Arch behavior is unchanged.
+    pub fn detect_distro_info(mut self: Pin<&mut Self>) {
+        let d = detect_distro();
+        self.as_mut().set_distro_id(QString::from(&d.id));
+        self.as_mut().set_distro_like(QString::from(&d.like));
+        self.as_mut()
+            .set_pkg_manager(QString::from(d.pkg_manager));
     }
 
     /// Run all setup preflight checks

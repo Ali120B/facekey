@@ -72,6 +72,7 @@ ApplicationWindow {
             backend.load_video_devices()
             backend.check_pam_status()
             backend.run_preflight()
+            backend.detect_distro_info()
             backend.probe_cameras()
             // First run (or broken setup) → guided wizard; it covers the
             // old standalone camera dialog, enroll and PAM wiring.
