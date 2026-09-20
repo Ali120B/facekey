@@ -75,6 +75,7 @@ ApplicationWindow {
             backend.detect_distro_info()
             backend.load_tuning()
             backend.load_auth_order()
+            backend.list_login_users()
             backend.probe_cameras()
             // First run (or broken setup) → guided wizard; it covers the
             // old standalone camera dialog, enroll and PAM wiring.
@@ -451,6 +452,16 @@ ApplicationWindow {
                         font.bold: true
                         color: dim
                         text: modelList.count
+                    }
+                }
+                ComboBox {
+                    Layout.preferredWidth: 130
+                    model: backend.login_users
+                    currentIndex: Math.max(0, backend.login_users.indexOf(backend.face_user))
+                    font.pixelSize: 12
+                    onActivated: {
+                        backend.face_user = currentText
+                        backend.refresh_models()
                     }
                 }
                 Item { Layout.fillWidth: true }

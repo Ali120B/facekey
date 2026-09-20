@@ -53,6 +53,9 @@ pub mod qobject {
         #[qproperty(QString, desktop_id)]
         // ── Auth ordering: face-first vs password-first ──
         #[qproperty(QString, auth_order)]
+        // ── Multi-user: which account Howdy commands target ──
+        #[qproperty(QList_QString, login_users)]
+        #[qproperty(QString, face_user)]
         // ── Recognition tuning (Howdy config) ──
         #[qproperty(i32, tune_timeout)]
         #[qproperty(f64, tune_certainty)]
@@ -155,6 +158,11 @@ pub mod qobject {
         #[qinvokable]
         fn detect_distro_info(self: Pin<&mut HowdyBackend>);
 
+        /// List human login users (uid 1000–60000) and default face_user
+        /// to the desktop user
+        #[qinvokable]
+        fn list_login_users(self: Pin<&mut HowdyBackend>);
+
         /// Auth order preference: "face-first" (default) or "password-first".
         /// Face-first inserts the Howdy line before the system includes so a
         /// face is always attempted; password-first appends it at the end so
@@ -239,6 +247,8 @@ pub struct HowdyBackendRust {
     tune_dark_threshold: f64,
     snapshots: QList<QString>,
     auth_order: QString,
+    login_users: QList<QString>,
+    face_user: QString,
 }
 
 const PAM_LINE_DEBIAN: &str = "auth sufficient pam_howdy.so";
@@ -363,6 +373,17 @@ fn test_run() -> bool {
     std::env::var("FACEKEY_TEST_RUN")
         .map(|v| v == "1")
         .unwrap_or(false)
+}
+
+/// Face user selected in the UI, falling back to the desktop user when
+/// nothing (valid) is selected yet.
+fn selected_user(backend: &qobject::HowdyBackend) -> String {
+    let u = backend.face_user().to_string();
+    if u.trim().is_empty() {
+        target_user()
+    } else {
+        u.trim().to_string()
+    }
 }
 
 /// The desktop user Howdy models belong to. The GUI runs unprivileged as the
@@ -918,14 +939,14 @@ impl qobject::HowdyBackend {
         // extra password prompt on every startup / after every add/remove.
         // NOTE: always pass -U: under pkexec Howdy would otherwise resolve the
         // user as root and list root's (empty) models instead of the user's.
-        let user = target_user();
+        let user = selected_user(&self);
         let output = Command::new(&howdy)
             .args(["-U", &user, "list"])
             .output()
             .ok()
             .filter(|o| o.status.success())
             .or_else(|| {
-                let user = target_user();
+                let user = selected_user(&self);
                 pkexec_howdy(&howdy, &user, &["list"]).ok()
             });
 
@@ -1061,7 +1082,7 @@ impl qobject::HowdyBackend {
         // travel as argv, never interpolated into a command string.
         let howdy_clone = howdy.clone();
         let label: String = name_str.chars().take(24).collect();
-        let user_clone = target_user();
+        let user_clone = { let u = self.as_ref().face_user().to_string(); if u.trim().is_empty() { target_user() } else { u.trim().to_string() } };
 
         std::thread::spawn(move || {
             // Step 1: capture. Howdy prints no usable id, so face_id stays None
@@ -1183,7 +1204,7 @@ impl qobject::HowdyBackend {
             Some(p) => p,
             None => return,
         };
-        let user = target_user();
+        let user = selected_user(&self);
 
         // Prefer the exact id from the last successful enrollment,
         // otherwise fall back to the highest known model id.
@@ -1223,7 +1244,7 @@ impl qobject::HowdyBackend {
                 return;
             }
         };
-        let user = target_user();
+        let user = selected_user(&self);
         let output = pkexec_howdy(&howdy, &user, &["remove", "-y", &index.to_string()]);
 
         match output {
@@ -1835,7 +1856,7 @@ impl qobject::HowdyBackend {
             return;
         }
 
-        let user = target_user();
+        let user = selected_user(&self);
         // Prefer unprivileged: `howdy test` opens an OpenCV preview window,
         // which needs the user's display. Under pkexec the display env is
         // stripped and Qt crashes (xcb). Models, config and camera are all
@@ -1895,6 +1916,51 @@ impl qobject::HowdyBackend {
             .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
             .unwrap_or_else(|_| "unknown".into());
         self.as_mut().set_desktop_id(QString::from(&desktop));
+    }
+
+    /// List human login users (uid 1000–60000) and default face_user
+    /// to the desktop user
+    pub fn list_login_users(mut self: Pin<&mut Self>) {
+        if test_run() {
+            let mut users = QList::<QString>::default();
+            users.append_clone(&QString::from("testuser"));
+            self.as_mut().set_login_users(users);
+            self.as_mut().set_face_user(QString::from("testuser"));
+            return;
+        }
+        let mut users: Vec<String> = Vec::new();
+        if let Ok(passwd) = fs::read_to_string("/etc/passwd") {
+            for line in passwd.lines() {
+                let parts: Vec<&str> = line.split(':').collect();
+                if parts.len() > 2 {
+                    if let Ok(uid) = parts[2].parse::<u32>() {
+                        if (1000..60000).contains(&uid) {
+                            users.push(parts[0].to_string());
+                        }
+                    }
+                }
+            }
+        }
+        users.sort();
+        users.dedup();
+        if users.is_empty() {
+            users.push(target_user());
+        }
+        let mut qusers = QList::<QString>::default();
+        for u in &users {
+            qusers.append_clone(&QString::from(u.as_str()));
+        }
+        self.as_mut().set_login_users(qusers);
+        let cur = selected_user(&self);
+        if !users.iter().any(|u| u == &cur) {
+            let me = target_user();
+            let def = if users.iter().any(|u| u == &me) {
+                me
+            } else {
+                users[0].clone()
+            };
+            self.as_mut().set_face_user(QString::from(def.as_str()));
+        }
     }
 
     fn auth_order_file() -> Option<std::path::PathBuf> {
