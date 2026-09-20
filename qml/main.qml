@@ -582,6 +582,17 @@ ApplicationWindow {
             }
             UiButton {
                 Layout.fillWidth: true
+                text: "▦  Snapshots"
+                kind: "tonal"
+                font.pixelSize: 13
+                onClicked: {
+                    backend.refresh_snapshots()
+                    galleryDialog.viewing = ""
+                    galleryDialog.open()
+                }
+            }
+            UiButton {
+                Layout.fillWidth: true
                 text: backend.howdy_enabled ? "○  Disable Howdy" : "●  Enable Howdy"
                 kind: "tonal"
                 font.pixelSize: 13
@@ -924,6 +935,99 @@ ApplicationWindow {
             }
         }
     }
+    }
+
+    // ── Snapshots gallery ─────────────────────────────────────────────────
+    Dialog {
+        id: galleryDialog
+        title: "Attempt snapshots"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: 560
+        height: 480
+        background: Rectangle { color: card; radius: 14; border.width: 1; border.color: line }
+
+        property string viewing: ""
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                visible: galleryDialog.viewing === ""
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                color: dim
+                text: "What the camera saw on recent attempts — failed logins included. Newest first."
+            }
+
+            // Lightbox
+            Image {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: galleryDialog.viewing !== ""
+                source: galleryDialog.viewing
+                fillMode: Image.PreserveAspectFit
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: galleryDialog.viewing = ""
+                }
+            }
+
+            GridView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: galleryDialog.viewing === ""
+                model: backend.snapshots
+                clip: true
+                cellWidth: 168
+                cellHeight: 120
+
+                delegate: Rectangle {
+                    width: 160; height: 112
+                    radius: 8
+                    color: field
+                    border.width: 1
+                    border.color: line
+                    clip: true
+
+                    Image {
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        source: modelData
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: galleryDialog.viewing = modelData
+                    }
+                }
+
+                Label {
+                    anchors.centerIn: parent
+                    visible: parent.count === 0
+                    text: "No snapshots yet"
+                    color: dim
+                    font.italic: true
+                    font.pixelSize: 12
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                UiButton {
+                    text: "Refresh"
+                    kind: "tonal"
+                    font.pixelSize: 12
+                    onClicked: backend.refresh_snapshots()
+                }
+                Item { Layout.fillWidth: true }
+                UiButton { text: galleryDialog.viewing !== "" ? "Back" : "Close"; kind: "ghost"; onClicked: { if (galleryDialog.viewing !== "") galleryDialog.viewing = ""; else galleryDialog.close() } }
+            }
+        }
     }
 
     // ── First-run setup wizard overlay ──────────────────────────────────

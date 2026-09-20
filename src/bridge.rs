@@ -55,6 +55,8 @@ pub mod qobject {
         #[qproperty(i32, tune_timeout)]
         #[qproperty(f64, tune_certainty)]
         #[qproperty(f64, tune_dark_threshold)]
+        // ── Attempt snapshots gallery ──
+        #[qproperty(QList_QString, snapshots)]
         type HowdyBackend = super::HowdyBackendRust;
 
         /// Check if device has supported IR camera
@@ -158,6 +160,10 @@ pub mod qobject {
         /// Save recognition tuning values (pkexec, staged + backed up)
         #[qinvokable]
         fn save_tuning(self: Pin<&mut HowdyBackend>, timeout: i32, certainty: f64, dark: f64);
+
+        /// Refresh the attempt-snapshots list (newest first, file:// URLs)
+        #[qinvokable]
+        fn refresh_snapshots(self: Pin<&mut HowdyBackend>);
     }
 }
 
@@ -211,6 +217,7 @@ pub struct HowdyBackendRust {
     tune_timeout: i32,
     tune_certainty: f64,
     tune_dark_threshold: f64,
+    snapshots: QList<QString>,
 }
 
 const PAM_LINE_DEBIAN: &str = "auth sufficient pam_howdy.so";
@@ -1894,6 +1901,37 @@ impl qobject::HowdyBackend {
         self.as_mut().set_tune_timeout(timeout);
         self.as_mut().set_tune_certainty(certainty);
         self.as_mut().set_tune_dark_threshold(dark);
+    }
+
+    /// Refresh the attempt-snapshots list (newest first, file:// URLs).
+    /// Snapshots are world-readable stills Howdy saves per attempt —
+    /// useful to see what the camera saw when a login failed.
+    pub fn refresh_snapshots(mut self: Pin<&mut Self>) {
+        let mut names: Vec<String> = fs::read_dir("/usr/lib/security/howdy/snapshots")
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                if n.ends_with(".jpg") || n.ends_with(".png") {
+                    Some(n)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        names.sort();
+        names.reverse();
+        names.truncate(30);
+        let mut list = QList::<QString>::default();
+        for n in &names {
+            list.append_clone(&QString::from(
+                format!("file:///usr/lib/security/howdy/snapshots/{}", n).as_str(),
+            ));
+        }
+        self.as_mut().set_snapshots(list);
+        self.as_mut()
+            .set_status_message(QString::from(&format!("{} snapshot(s)", names.len())));
     }
 
     /// Save recognition tuning values (staged + backed up + pkexec)
