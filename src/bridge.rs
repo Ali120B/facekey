@@ -51,6 +51,8 @@ pub mod qobject {
         #[qproperty(bool, is_debian)]
         #[qproperty(QString, pam_module_kind)]
         #[qproperty(QString, desktop_id)]
+        // ── Auth ordering: face-first vs password-first ──
+        #[qproperty(QString, auth_order)]
         // ── Recognition tuning (Howdy config) ──
         #[qproperty(i32, tune_timeout)]
         #[qproperty(f64, tune_certainty)]
@@ -153,6 +155,19 @@ pub mod qobject {
         #[qinvokable]
         fn detect_distro_info(self: Pin<&mut HowdyBackend>);
 
+        /// Auth order preference: "face-first" (default) or "password-first".
+        /// Face-first inserts the Howdy line before the system includes so a
+        /// face is always attempted; password-first appends it at the end so
+        /// a correct password sails through and face only triggers on an
+        /// empty/failed password. Persists to ~/.config/facekey/auth_order.
+        /// (Named apply_* because the auth_order qproperty owns set_auth_order.)
+        #[qinvokable]
+        fn apply_auth_order(self: Pin<&mut HowdyBackend>, mode: QString);
+
+        /// Load the persisted auth order (call at startup)
+        #[qinvokable]
+        fn load_auth_order(self: Pin<&mut HowdyBackend>);
+
         /// Load recognition tuning values from howdy config.ini
         #[qinvokable]
         fn load_tuning(self: Pin<&mut HowdyBackend>);
@@ -223,6 +238,7 @@ pub struct HowdyBackendRust {
     tune_certainty: f64,
     tune_dark_threshold: f64,
     snapshots: QList<QString>,
+    auth_order: QString,
 }
 
 const PAM_LINE_DEBIAN: &str = "auth sufficient pam_howdy.so";
@@ -1596,6 +1612,8 @@ impl qobject::HowdyBackend {
         } else if file_path.as_str() == PAM_POLKIT {
             // For polkit: always use the full module path and remove any pre-existing
             // howdy lines (commented or active) to produce a clean, canonical file.
+            // Password-first mode appends at the end instead (same semantics
+            // as the generic path above).
             let mut lines: Vec<String> = content
                 .lines()
                 .filter(|l| {
@@ -1604,16 +1622,20 @@ impl qobject::HowdyBackend {
                 })
                 .map(|l| l.to_string())
                 .collect();
-            let pos = if lines
-                .first()
-                .map(|l| l.starts_with("#%PAM-1.0"))
-                .unwrap_or(false)
-            {
-                1
+            if Self::read_auth_order() == "password-first" {
+                lines.push(pam_module_lines().1.to_string());
             } else {
-                0
-            };
-            lines.insert(pos, pam_module_lines().1.to_string());
+                let pos = if lines
+                    .first()
+                    .map(|l| l.starts_with("#%PAM-1.0"))
+                    .unwrap_or(false)
+                {
+                    1
+                } else {
+                    0
+                };
+                lines.insert(pos, pam_module_lines().1.to_string());
+            }
             lines.join("\n") + "\n"
         } else {
             let has_commented = content.lines().any(|line| {
@@ -1638,18 +1660,26 @@ impl qobject::HowdyBackend {
                     .join("\n")
                     + "\n"
             } else {
-                // Insert after #%PAM-1.0 header if present, otherwise at the top
+                // Face-first (default): insert after #%PAM-1.0 header so the
+                // face is always attempted before the password stack.
+                // Password-first: append at the end, after the system
+                // includes — a correct password succeeds first and Howdy
+                // only runs on empty/failed passwords.
                 let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-                let pos = if lines
-                    .first()
-                    .map(|l| l.starts_with("#%PAM-1.0"))
-                    .unwrap_or(false)
-                {
-                    1
+                if Self::read_auth_order() == "password-first" {
+                    lines.push(pam_module_lines().0.to_string());
                 } else {
-                    0
-                };
-                lines.insert(pos, pam_module_lines().0.to_string());
+                    let pos = if lines
+                        .first()
+                        .map(|l| l.starts_with("#%PAM-1.0"))
+                        .unwrap_or(false)
+                    {
+                        1
+                    } else {
+                        0
+                    };
+                    lines.insert(pos, pam_module_lines().0.to_string());
+                }
                 lines.join("\n") + "\n"
             }
         };
@@ -1867,6 +1897,51 @@ impl qobject::HowdyBackend {
         self.as_mut().set_desktop_id(QString::from(&desktop));
     }
 
+    fn auth_order_file() -> Option<std::path::PathBuf> {
+        std::env::var("HOME")
+            .ok()
+            .map(|h| Path::new(&h).join(".config/facekey/auth_order"))
+    }
+
+    /// Persisted auth order, defaulting to face-first
+    fn read_auth_order() -> String {
+        Self::auth_order_file()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| s == "password-first" || s == "face-first")
+            .unwrap_or_else(|| "face-first".to_string())
+    }
+
+    /// Load the persisted auth order (call at startup)
+    pub fn load_auth_order(mut self: Pin<&mut Self>) {
+        // read_file exists so test-run can observe the default too
+        let mode = if test_run() {
+            "face-first".to_string()
+        } else {
+            Self::read_auth_order()
+        };
+        self.as_mut().set_auth_order(QString::from(&mode));
+    }
+
+    /// Set + persist the auth order preference
+    pub fn apply_auth_order(mut self: Pin<&mut Self>, mode: QString) {
+        let mode = mode.to_string();
+        let mode = if mode == "password-first" {
+            "password-first"
+        } else {
+            "face-first"
+        };
+        if !test_run() {
+            if let Some(p) = Self::auth_order_file() {
+                if let Some(parent) = p.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&p, mode);
+            }
+        }
+        self.as_mut().set_auth_order(QString::from(mode));
+    }
+
     /// Parse a float config value with fallback (skips comments)
     fn tune_value(content: &str, key: &str, fallback: f64) -> f64 {
         for line in content.lines() {
@@ -1911,7 +1986,8 @@ impl qobject::HowdyBackend {
     /// Refresh the attempt-snapshots list (newest first, file:// URLs).
     /// Snapshots are world-readable stills Howdy saves per attempt —
     /// useful to see what the camera saw when a login failed.
-    pub fn refresh_snapshots(mut self: Pin<&mut Self>) {        let mut names: Vec<String> = fs::read_dir("/usr/lib/security/howdy/snapshots")
+    pub fn refresh_snapshots(mut self: Pin<&mut Self>) {
+        let mut names: Vec<String> = fs::read_dir("/usr/lib/security/howdy/snapshots")
             .into_iter()
             .flatten()
             .filter_map(|e| e.ok())
@@ -1949,9 +2025,8 @@ impl qobject::HowdyBackend {
         }
         if polkit_agent_running() {
             self.as_mut().set_setup_agent(true);
-            self.as_mut().set_status_message(QString::from(
-                "Polkit agent already running",
-            ));
+            self.as_mut()
+                .set_status_message(QString::from("Polkit agent already running"));
             return;
         }
         let desktop = std::env::var("XDG_CURRENT_DESKTOP")
@@ -2015,7 +2090,9 @@ impl qobject::HowdyBackend {
                             if cfg.ends_with(".lua") {
                                 c.push_str("    hl.exec_cmd(\"/usr/lib/hyprpolkitagent/hyprpolkitagent\")\n");
                             } else {
-                                c.push_str("exec-once = /usr/lib/hyprpolkitagent/hyprpolkitagent\n");
+                                c.push_str(
+                                    "exec-once = /usr/lib/hyprpolkitagent/hyprpolkitagent\n",
+                                );
                             }
                             if std::fs::write(&p, c).is_ok() {
                                 notes.push("hyprland autostart patched");

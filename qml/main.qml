@@ -74,6 +74,7 @@ ApplicationWindow {
             backend.run_preflight()
             backend.detect_distro_info()
             backend.load_tuning()
+            backend.load_auth_order()
             backend.probe_cameras()
             // First run (or broken setup) → guided wizard; it covers the
             // old standalone camera dialog, enroll and PAM wiring.
@@ -760,6 +761,25 @@ ApplicationWindow {
             Layout.fillWidth: true
 
             Label { text: "System integration"; font.pixelSize: 15; font.bold: true; color: ink }
+
+            RowLayout {
+                Layout.fillWidth: true
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 1
+                    Label { text: backend.auth_order === "password-first" ? "Password first" : "Face first"; font.pixelSize: 13; font.bold: true; color: ink }
+                    Label { text: backend.auth_order === "password-first" ? "Password is tried first, face on empty/failed entry" : "Face is always attempted before the password"; font.pixelSize: 11; color: dim }
+                }
+                UiSwitch {
+                    checked: backend.auth_order !== "password-first"
+                    onToggled: {
+                        // UiSwitch fires on programmatic sets too; only act on user flips
+                        var want = checked ? "face-first" : "password-first"
+                        if (want !== backend.auth_order)
+                            backend.apply_auth_order(want)
+                    }
+                }
+            }
 
             ColumnLayout {
                 Layout.fillWidth: true
