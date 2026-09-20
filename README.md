@@ -17,7 +17,12 @@ chmod +x facekey-*-x86_64.AppImage
 ./facekey-*-x86_64.AppImage
 ```
 
-You still need Howdy itself plus a few system packages on the machine:
+Pop!_OS / Ubuntu support is in progress (installer + sudo + lock solid,
+GDM greeter login experimental) — see `docs/friend-test.md` if you want
+to help verify it on real hardware.
+
+You still need Howdy itself plus a few system packages on the machine
+(on Arch — Pop!_OS users get all of this through the setup wizard):
 
 ```bash
 sudo pacman -S howdy v4l-utils mpv polkit

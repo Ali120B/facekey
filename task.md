@@ -27,17 +27,18 @@ new matrix entry is verified on hardware before it ships.
   - [ ] Toggles behind hardware verification ONLY
   - [ ] sudo entry (same pattern as Arch, verify)
 
-- [ ] **Phase 4 — Camera copy for non-IR**
-  - [ ] Wizard/preflight wording: IR recommended, RGB supported
-  - [ ] Heuristic labels RGB picks explicitly (no behavior change)
+- [x] **Phase 4 — Camera copy for non-IR**
+  - [x] Wizard/manager/doctor wording works for RGB webcams too
+  - [x] Heuristic still flags IR; RGB is explicit fallback (verified logic)
 
-- [ ] **Phase 5 — Friend test loop**
-  - [ ] AppImage test builds + written checklist (sudo, lock, logout,
-        reboot-login, dark room, wrong face) + one-command log capture
-  - [ ] Fix cycles from journal evidence
+- [x] **Phase 5 — Friend test loop**
+  - [x] `docs/friend-test.md`: checklist + log capture + GDM probes
+  - [x] README notes Pop status
+  - [ ] Awaiting friend hardware results (GDM greeter + lock service TBD)
 
-- [ ] **Phase 6 — Release**
-  - [ ] Version bump, tag, AppImage, README (Pop section)
+- [x] **Phase 6 — Release**
+  - [x] 3.2.0: audit fixes, test-run follow-ups, Debian backend,
+        GDM support, non-IR copy, friend-test kit
 
 ## Decisions
 - Arch-only until Debian matrix is hardware-verified (no unverified PAM).

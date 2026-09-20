@@ -312,10 +312,10 @@ ApplicationWindow {
                 text: registerDialog.captureSuccess
                     ? "Face captured. Save it or cancel to discard."
                     : registerDialog.capturing
-                        ? "Look directly at the IR camera."
+                        ? "Look directly at the camera."
                         : registerDialog.captureFailed
                             ? "Check lighting, face the camera, move closer.\n\n" + registerDialog.failureMessage
-                            : "Face the IR camera in good light, then start."
+                            : "Face the camera in good light, then start."
             }
 
             Rectangle {
@@ -600,7 +600,7 @@ ApplicationWindow {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 2
-                    Label { text: "Infrared camera"; font.pixelSize: 13; font.bold: true; color: ink }
+                    Label { text: "Camera"; font.pixelSize: 13; font.bold: true; color: ink }
                     Label {
                         text: backend.camera_configured ? "Device configured" : "Not configured"
                         font.pixelSize: 11
@@ -817,7 +817,7 @@ ApplicationWindow {
                     { ok: backend.setup_pam_python, title: "PAM module", sub: backend.setup_pam_python ? "pam_python.so present" : "missing — face auth cannot engage" },
                     { ok: backend.setup_models, title: "AI models", sub: backend.setup_models ? "dlib data on disk" : "missing" },
                     { ok: backend.setup_agent, title: "Polkit agent", sub: backend.setup_agent ? "running" : "not running — dialogs fall back to terminal" },
-                    { ok: backend.setup_ir_camera, title: "IR camera", sub: backend.setup_ir_camera ? "detected" : "none detected" },
+                    { ok: backend.setup_ir_camera, title: "IR camera", sub: backend.setup_ir_camera ? "detected" : "none — a normal webcam works too" },
                     { ok: backend.camera_configured, title: "Camera configured", sub: backend.camera_configured ? "device_path is set" : "not set" }
                 ]
                 RowLayout {

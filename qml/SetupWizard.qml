@@ -146,7 +146,7 @@ Rectangle {
                     wrapMode: Text.Wrap
                     font.pixelSize: 13
                     color: dim
-                    text: "This wizard installs Howdy and its dependencies,\nfinds your IR camera, enrolls your face\nand wires up login, lock and sudo."
+                    text: "This wizard installs Howdy and its dependencies,\nfinds your camera (IR or regular webcam), enrolls your face\nand wires up login, lock and sudo."
                 }
                 Item { Layout.fillHeight: true }
                 RowLayout {
@@ -178,7 +178,7 @@ Rectangle {
                             wizard.checkRow(backend.setup_toolchain, backend.is_debian ? "Build tools" : "Build tools (gcc/make/pkgconf/fakeroot)", backend.is_debian ? "prebuilt .debs — nothing to compile" : backend.setup_toolchain ? "ready for AUR builds" : "missing — installed in the next step"),
                             wizard.checkRow(backend.setup_aur_helper !== "", backend.is_debian ? "Package source" : "AUR helper", backend.is_debian ? "PPA + apt (native)" : backend.setup_aur_helper !== "" ? backend.setup_aur_helper : "none found (need yay or paru)"),
                             wizard.checkRow(backend.setup_agent, "Polkit agent", backend.setup_agent ? "running" : "not running — password popups fall back to terminal"),
-                            wizard.checkRow(backend.setup_ir_camera, "IR camera", backend.setup_ir_camera ? "detected" : "none detected yet")
+                            wizard.checkRow(backend.setup_ir_camera, "IR camera", backend.setup_ir_camera ? "detected" : "none — a normal webcam works too (needs light)"),
                         ]
                         delegate: RowLayout {
                             width: ListView.view.width
@@ -310,13 +310,13 @@ Rectangle {
             // ── 3 Camera ────────────────────────────────────────────────
             ColumnLayout {
                 spacing: 10
-                Label { text: "Pick your IR camera"; font.pixelSize: 20; font.bold: true; color: ink }
+                Label { text: "Pick your camera"; font.pixelSize: 20; font.bold: true; color: ink }
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                     font.pixelSize: 13
                     color: dim
-                    text: "IR sensors usually expose a small square frame (e.g. 340×340). The guess is highlighted — confirm it in the live preview."
+                    text: "IR sensors usually expose a small square frame (e.g. 340×340) and work in the dark. A regular webcam works too — it just needs good light. Confirm your pick in the live preview."
                 }
 
                 MediaDevices { id: qtCams }
@@ -433,7 +433,7 @@ Rectangle {
                     wrapMode: Text.Wrap
                     font.pixelSize: 13
                     color: dim
-                    text: "Look at the IR camera when asked. You can add more faces later (glasses, low light…)."
+                    text: "Look at the camera when asked. You can add more faces later (glasses, low light…)."
                 }
                 TextField {
                     id: wizName
