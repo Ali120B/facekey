@@ -1,9 +1,21 @@
-# FaceKey Pop!_OS support — task plan
+# FaceKey — task plan (Pop!_OS support DROPPED in v4.0.0)
 
-Goal: FaceKey installs, enrolls and manages Howdy on Debian-family
-systems (Pop!_OS first) exactly like it does on Arch, for IR **and**
-normal RGB cameras. Auth: system dialogs. No blind PAM edits — every
-new matrix entry is verified on hardware before it ships.
+Arch-based only. The Debian backend (apt install, PPA handoff, GDM
+matrix) was prototyped across Phase 1–2, then cut: impractical without
+local hardware, and unverified PAM edits are a lockout risk. The work
+survives in git history (`git log --all --grep="Phase 2"`,
+`docs/friend-test.md` before removal) if it ever comes back.
+Kept deliberately: distro detection props, PAM flavor auto-detect
+(pam_python vs pam_howdy) — both harmless and correct everywhere.
+
+## Phases (all complete unless noted)
+- [x] Phase 0 — FaceKey rebrand
+- [x] Phase 1 — Backend detection + install API
+- [x] Phase 2 — was apt flow; cut, Arch-only wizard retained
+- [x] Phase 3 — Doctor screen
+- [x] Phase 4 — Camera copy for non-IR
+- [x] Phase 5 — was friend-test kit; removed with Pop scope
+- [x] Phase 6 — Release 4.0.0
 
 ## Phases
 

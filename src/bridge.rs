@@ -50,8 +50,6 @@ pub mod qobject {
         #[qproperty(QString, pkg_manager)]
         #[qproperty(bool, is_debian)]
         #[qproperty(QString, pam_module_kind)]
-        #[qproperty(bool, gdm_installed)]
-        #[qproperty(bool, pam_gdm)]
         #[qproperty(QString, desktop_id)]
         type HowdyBackend = super::HowdyBackendRust;
 
@@ -197,8 +195,6 @@ pub struct HowdyBackendRust {
     pkg_manager: QString,
     is_debian: bool,
     pam_module_kind: QString,
-    gdm_installed: bool,
-    pam_gdm: bool,
     desktop_id: QString,
 }
 
@@ -214,9 +210,6 @@ const PAM_SYSTEM_LOGIN: &str = "/etc/pam.d/system-local-login";
 const PAM_PLASMA_LM: &str = "/etc/pam.d/plasmalogin";
 const PAM_POLKIT: &str = "/etc/pam.d/polkit-1";
 const PAM_HYPRLOCK: &str = "/etc/pam.d/hyprlock";
-/// GDM greeter on Debian-family (EXPERIMENTAL — upstream greeter login is
-/// flaky, see findings.md; ships behind hardware verification)
-const PAM_GDM: &str = "/etc/pam.d/gdm-password";
 // polkit-agent-helper resolves PAM modules in a restricted sandbox; use the full path.
 const PAM_POLKIT_LINE_DEBIAN: &str = "auth sufficient /lib/security/pam_howdy.so";
 const PAM_POLKIT_LINE_ARCH: &str = "auth sufficient pam_python.so /lib/security/howdy/pam.py";
@@ -412,10 +405,6 @@ const REPO_PACKAGES_ARCH: &[&str] = &[
     "fakeroot",
 ];
 
-/// Repo packages on Debian-family (Qt ships inside the AppImage;
-/// AUR/toolchain concepts do not apply — .debs are prebuilt)
-const REPO_PACKAGES_DEBIAN: &[&str] = &["v4l-utils"];
-
 /// dlib model files that must ship inside the howdy package
 const DLIB_MODELS: &[&str] = &[
     "shape_predictor_5_face_landmarks.dat",
@@ -569,7 +558,6 @@ fn pam_managed(path: &str) -> bool {
         PAM_PLASMA_LM,
         PAM_POLKIT,
         PAM_HYPRLOCK,
-        PAM_GDM,
     ]
     .contains(&path)
 }
@@ -740,13 +728,6 @@ impl qobject::HowdyBackend {
         // Screen locker actually in use on Hyprland setups
         let hyprlock = Path::new("/usr/bin/hyprlock").exists() || pacman_installed("hyprlock");
         self.as_mut().set_hyprlock_installed(hyprlock);
-
-        // GDM greeter (Debian-family default). Binary lives in sbin there.
-        let gdm = Path::new("/usr/bin/gdm3").exists()
-            || Path::new("/usr/sbin/gdm3").exists()
-            || Path::new("/usr/bin/gdm").exists()
-            || which_first(&["gdm3", "gdm"]).is_some();
-        self.as_mut().set_gdm_installed(gdm);
     }
 
     /// Check if device has a supported IR camera for howdy
@@ -1462,7 +1443,6 @@ impl qobject::HowdyBackend {
         self.as_mut().set_pam_plasma_lm(read(PAM_PLASMA_LM));
         self.as_mut().set_pam_polkit(read(PAM_POLKIT));
         self.as_mut().set_pam_hyprlock(read(PAM_HYPRLOCK));
-        self.as_mut().set_pam_gdm(read(PAM_GDM));
     }
 
     /// Toggle the howdy line in the given PAM file path:
@@ -1502,11 +1482,6 @@ impl qobject::HowdyBackend {
                 PAM_HYPRLOCK => {
                     let cur = *self.as_ref().pam_hyprlock();
                     self.as_mut().set_pam_hyprlock(!cur);
-                    !cur
-                }
-                PAM_GDM => {
-                    let cur = *self.as_ref().pam_gdm();
-                    self.as_mut().set_pam_gdm(!cur);
                     !cur
                 }
                 _ if file_path.as_str() == PAM_POLKIT => {
@@ -1763,7 +1738,6 @@ impl qobject::HowdyBackend {
                     PAM_KDE => self.as_mut().set_pam_kde(new_state),
                     PAM_SUDO => self.as_mut().set_pam_sudo(new_state),
                     PAM_HYPRLOCK => self.as_mut().set_pam_hyprlock(new_state),
-                    PAM_GDM => self.as_mut().set_pam_gdm(new_state),
                     PAM_SYSTEM_LOGIN => self.as_mut().set_pam_system_login(new_state),
                     PAM_PLASMA_LM => self.as_mut().set_pam_plasma_lm(new_state),
                     _ => {}
@@ -1887,20 +1861,15 @@ impl qobject::HowdyBackend {
         self.as_mut().set_setup_models(dlib_models_present());
         let debian = detect_distro().is_debian();
         self.as_mut().set_is_debian(debian);
-        if debian {
-            // .debs are prebuilt: no toolchain or AUR helper concept.
-            self.as_mut().set_setup_toolchain(true);
-            self.as_mut()
-                .set_setup_aur_helper(QString::from("apt (native)"));
-        } else {
-            self.as_mut().set_setup_toolchain(
-                ["gcc", "make", "pkgconf", "fakeroot"]
-                    .iter()
-                    .all(|p| which_first(&[*p]).is_some()),
-            );
-            let helper = which_first(&["yay", "paru"]).unwrap_or_default();
-            self.as_mut().set_setup_aur_helper(QString::from(&helper));
-        }
+        // Debian-family installs are not supported in this release, so the
+        // Arch checks below run everywhere (harmless elsewhere).
+        self.as_mut().set_setup_toolchain(
+            ["gcc", "make", "pkgconf", "fakeroot"]
+                .iter()
+                .all(|p| which_first(&[*p]).is_some()),
+        );
+        let helper = which_first(&["yay", "paru"]).unwrap_or_default();
+        self.as_mut().set_setup_aur_helper(QString::from(&helper));
         self.as_mut().set_setup_agent(polkit_agent_running());
         let mut ir = false;
         for d in list_video_devices() {
@@ -2016,24 +1985,16 @@ impl qobject::HowdyBackend {
                 "FaceKey system-package install\n",
             );
             let debian = detect_distro().is_debian();
-            let pkgs = if debian {
-                REPO_PACKAGES_DEBIAN.join(" ")
-            } else {
-                REPO_PACKAGES_ARCH.join(" ")
-            };
-            let install_cmd = if debian {
-                // No --needed equivalent; -y answers yes. DEBIAN_FRONTEND is
-                // left alone so debconf still prompts if it must.
-                format!(
-                    "apt-get update >> /tmp/facekey_install.log 2>&1 && apt-get install -y {} >> /tmp/facekey_install.log 2>&1",
-                    pkgs
-                )
-            } else {
-                format!(
-                    "pacman -S --needed --noconfirm {} >> /tmp/facekey_install.log 2>&1",
-                    pkgs
-                )
-            };
+            if debian {
+                // Debian-family installs are not supported in this release.
+                let _ = fs::write("/tmp/facekey_install_done", "UNSUPPORTED");
+                return;
+            }
+            let pkgs = REPO_PACKAGES_ARCH.join(" ");
+            let install_cmd = format!(
+                "pacman -S --needed --noconfirm {} >> /tmp/facekey_install.log 2>&1",
+                pkgs
+            );
             let script = format!(
                 "{}; code=$?; chmod 644 /tmp/facekey_install.log; echo $code > /tmp/facekey_install_done; exit $code",
                 install_cmd
@@ -2075,6 +2036,8 @@ impl qobject::HowdyBackend {
                     self.as_mut().set_install_failed(true);
                     let detail = if other == "PKEXEC_FAILED" {
                         "authorization was cancelled or pkexec failed — press Install to retry"
+                    } else if other == "UNSUPPORTED" {
+                        "Debian-family installs are not supported in this release"
                     } else {
                         "package install failed — see log above, then press Install to retry"
                     };
@@ -2087,10 +2050,9 @@ impl qobject::HowdyBackend {
     }
 
     /// Open a user terminal running the engine install.
-    /// Arch: yay/paru build howdy + pam-python from the AUR (helpers refuse
-    /// root, so this runs unelevated and yay asks for sudo itself).
-    /// Debian-family: PPA + apt (the .deb debconf prompt for the certainty
-    /// profile is interactive, so this also needs a real terminal).
+    /// Arch only: yay/paru build howdy + pam-python from the AUR (helpers
+    /// refuse root, so this runs unelevated and yay asks for sudo itself).
+    /// Debian-family installs are not supported in this release.
     pub fn launch_aur_install(mut self: Pin<&mut Self>) {
         if test_run() {
             self.as_mut().set_install_error(QString::from(""));
@@ -2100,9 +2062,13 @@ impl qobject::HowdyBackend {
             return;
         }
         let debian = detect_distro().is_debian();
-        let inner = if debian {
-            "echo 'FaceKey: adding the Howdy PPA and installing (it will ask for the Fast/Balanced/Secure profile)'; sudo add-apt-repository -y ppa:boltgolt/howdy && sudo apt-get update && sudo apt-get install -y howdy".to_string()
-        } else {
+        if debian {
+            self.as_mut().set_install_error(QString::from(
+                "Debian-family installs are not supported in this release",
+            ));
+            return;
+        }
+        let inner = {
             let helper = match which_first(&["yay", "paru"]) {
                 Some(h) => h,
                 None => {

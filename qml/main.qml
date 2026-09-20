@@ -683,17 +683,6 @@ ApplicationWindow {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        visible: backend.gdm_installed
-                        ColumnLayout {
-                            spacing: 1
-                            Label { text: "Login screen"; font.pixelSize: 13; font.bold: true; color: ink }
-                            Label { text: "GDM (experimental)"; font.pixelSize: 11; color: warn }
-                        }
-                        Item { Layout.fillWidth: true }
-                        UiSwitch { checked: backend.pam_gdm; onToggled: backend.toggle_pam("/etc/pam.d/gdm-password") }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
                         visible: backend.sddm_installed
                         ColumnLayout {
                             spacing: 1
