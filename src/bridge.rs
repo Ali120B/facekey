@@ -164,6 +164,11 @@ pub mod qobject {
         /// Refresh the attempt-snapshots list (newest first, file:// URLs)
         #[qinvokable]
         fn refresh_snapshots(self: Pin<&mut HowdyBackend>);
+
+        /// Install + autostart a polkit agent and start one now.
+        /// Picks hyprpolkitagent on Hyprland, else GNOME/KDE agent.
+        #[qinvokable]
+        fn fix_polkit_agent(self: Pin<&mut HowdyBackend>);
     }
 }
 
@@ -1906,8 +1911,7 @@ impl qobject::HowdyBackend {
     /// Refresh the attempt-snapshots list (newest first, file:// URLs).
     /// Snapshots are world-readable stills Howdy saves per attempt —
     /// useful to see what the camera saw when a login failed.
-    pub fn refresh_snapshots(mut self: Pin<&mut Self>) {
-        let mut names: Vec<String> = fs::read_dir("/usr/lib/security/howdy/snapshots")
+    pub fn refresh_snapshots(mut self: Pin<&mut Self>) {        let mut names: Vec<String> = fs::read_dir("/usr/lib/security/howdy/snapshots")
             .into_iter()
             .flatten()
             .filter_map(|e| e.ok())
@@ -1932,6 +1936,119 @@ impl qobject::HowdyBackend {
         self.as_mut().set_snapshots(list);
         self.as_mut()
             .set_status_message(QString::from(&format!("{} snapshot(s)", names.len())));
+    }
+
+    /// Install + autostart a polkit agent and start one now.
+    /// Choice: hyprpolkitagent on Hyprland, else GNOME, else KDE agent.
+    /// Autostart via XDG entry always, plus the Hyprland config when present.
+    pub fn fix_polkit_agent(mut self: Pin<&mut Self>) {
+        if test_run() {
+            self.as_mut()
+                .set_status_message(QString::from("Polkit agent started (test mode)"));
+            return;
+        }
+        if polkit_agent_running() {
+            self.as_mut().set_setup_agent(true);
+            self.as_mut().set_status_message(QString::from(
+                "Polkit agent already running",
+            ));
+            return;
+        }
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP")
+            .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
+            .unwrap_or_default()
+            .to_lowercase();
+        let on_hyprland = desktop.contains("hyprland");
+        let candidates: &[&str] = if on_hyprland {
+            &[
+                "/usr/lib/hyprpolkitagent/hyprpolkitagent",
+                "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
+                "/usr/lib/polkit-kde-authentication-agent-1",
+            ]
+        } else {
+            &[
+                "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
+                "/usr/lib/polkit-kde-authentication-agent-1",
+                "/usr/lib/hyprpolkitagent/hyprpolkitagent",
+            ]
+        };
+        let agent = candidates.iter().find(|p| Path::new(p).exists());
+        let agent = match agent {
+            Some(a) => a.to_string(),
+            None => {
+                self.as_mut().set_status_message(QString::from(
+                    "No polkit agent installed (hyprpolkitagent / polkit-gnome / polkit-kde)",
+                ));
+                return;
+            }
+        };
+
+        // XDG autostart covers GNOME/KDE/COSMIC and autostart daemons.
+        let mut notes = Vec::new();
+        if let Ok(home) = std::env::var("HOME") {
+            let dir = Path::new(&home).join(".config/autostart");
+            if std::fs::create_dir_all(&dir).is_ok() {
+                let entry = format!(
+                    "[Desktop Entry]\nType=Application\nName=FaceKey polkit agent\nExec={}\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n",
+                    agent
+                );
+                if std::fs::write(dir.join("facekey-polkit-agent.desktop"), entry).is_ok() {
+                    notes.push("autostart entry written");
+                }
+            }
+        }
+        // Hyprland does not process XDG autostart: patch its own config.
+        if on_hyprland {
+            if let Ok(home) = std::env::var("HOME") {
+                let hp = Path::new(&home).join(".config/hypr");
+                for cfg in ["hyprland.lua", "hyprland.conf"] {
+                    let p = hp.join(cfg);
+                    if let Ok(content) = std::fs::read_to_string(&p) {
+                        if !content.contains("hyprpolkitagent")
+                            && !content.contains("polkit-kde-authentication-agent")
+                            && !content.contains("polkit-gnome-authentication-agent")
+                        {
+                            let mut c = content;
+                            if !c.ends_with('\n') {
+                                c.push('\n');
+                            }
+                            if cfg.ends_with(".lua") {
+                                c.push_str("    hl.exec_cmd(\"/usr/lib/hyprpolkitagent/hyprpolkitagent\")\n");
+                            } else {
+                                c.push_str("exec-once = /usr/lib/hyprpolkitagent/hyprpolkitagent\n");
+                            }
+                            if std::fs::write(&p, c).is_ok() {
+                                notes.push("hyprland autostart patched");
+                            }
+                        } else {
+                            notes.push("hyprland autostart already present");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        // Start one right now (detached): it inherits our session env.
+        let started = Command::new(&agent)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .is_ok();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let running = polkit_agent_running();
+        self.as_mut().set_setup_agent(running);
+        let mut msg = if running {
+            "Polkit agent started".to_string()
+        } else if started {
+            "Agent launched but not detected yet — check after login".to_string()
+        } else {
+            "Could not launch the agent".to_string()
+        };
+        if !notes.is_empty() {
+            msg.push_str(&format!(" ({})", notes.join(", ")));
+        }
+        self.as_mut().set_status_message(QString::from(&msg));
     }
 
     /// Save recognition tuning values (staged + backed up + pkexec)

@@ -921,6 +921,12 @@ ApplicationWindow {
                         backend.check_pam_status()
                     }
                 }
+                UiButton {
+                    text: "Fix agent"
+                    kind: "tonal"
+                    visible: !backend.setup_agent
+                    onClicked: backend.fix_polkit_agent()
+                }
                 Item { Layout.fillWidth: true }
                 UiButton { text: "Close"; kind: "ghost"; onClicked: doctorDialog.close() }
                 UiButton {
