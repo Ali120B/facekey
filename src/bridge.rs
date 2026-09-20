@@ -56,6 +56,9 @@ pub mod qobject {
         // ── Multi-user: which account Howdy commands target ──
         #[qproperty(QList_QString, login_users)]
         #[qproperty(QString, face_user)]
+        // ── Self-update check ──
+        #[qproperty(bool, update_available)]
+        #[qproperty(QString, latest_version)]
         // ── Recognition tuning (Howdy config) ──
         #[qproperty(i32, tune_timeout)]
         #[qproperty(f64, tune_certainty)]
@@ -163,6 +166,18 @@ pub mod qobject {
         #[qinvokable]
         fn list_login_users(self: Pin<&mut HowdyBackend>);
 
+        /// Check GitHub for a newer release (threaded, silent on failure)
+        #[qinvokable]
+        fn check_for_updates(self: Pin<&mut HowdyBackend>);
+
+        /// Download the latest AppImage into ~/Downloads (threaded)
+        #[qinvokable]
+        fn download_update(self: Pin<&mut HowdyBackend>);
+
+        /// Pick up a finished update check/download (GUI thread, poll me)
+        #[qinvokable]
+        fn poll_update(self: Pin<&mut HowdyBackend>) -> bool;
+
         /// Auth order preference: "face-first" (default) or "password-first".
         /// Face-first inserts the Howdy line before the system includes so a
         /// face is always attempted; password-first appends it at the end so
@@ -249,6 +264,8 @@ pub struct HowdyBackendRust {
     auth_order: QString,
     login_users: QList<QString>,
     face_user: QString,
+    update_available: bool,
+    latest_version: QString,
 }
 
 const PAM_LINE_DEBIAN: &str = "auth sufficient pam_howdy.so";
@@ -384,6 +401,69 @@ fn selected_user(backend: &qobject::HowdyBackend) -> String {
     } else {
         u.trim().to_string()
     }
+}
+
+/// Compare dotted versions ("1.9.0" vs "v4.0.0"). Returns true when
+/// `latest` is newer than `current`.
+fn version_newer(current: &str, latest: &str) -> bool {
+    fn parts(v: &str) -> Vec<u64> {
+        v.trim()
+            .trim_start_matches('v')
+            .split('.')
+            .map(|p| {
+                p.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .parse::<u64>()
+                    .unwrap_or(0)
+            })
+            .collect()
+    }
+    let (mut a, mut b) = (parts(current), parts(latest));
+    let n = a.len().max(b.len());
+    a.resize(n, 0);
+    b.resize(n, 0);
+    a < b
+}
+
+/// Minimal GitHub latest-release lookup without new dependencies:
+/// returns (tag, appimage_url) if both parse out of the API JSON.
+fn github_latest() -> Option<(String, String)> {
+    let out = Command::new("curl")
+        .args([
+            "-s",
+            "--max-time",
+            "10",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "https://api.github.com/Ali120B/facekey/releases/latest",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let body = String::from_utf8_lossy(&out.stdout);
+    let tag = body
+        .split("\"tag_name\"")
+        .nth(1)?
+        .split('"')
+        .nth(2)?
+        .to_string();
+    let url = body
+        .split("\"browser_download_url\"")
+        .skip(1)
+        .filter_map(|chunk| chunk.split('"').nth(2))
+        .find(|u| u.ends_with(".AppImage"))?
+        .to_string();
+    Some((tag, url))
+}
+
+/// Only release assets from our own repo may be downloaded.
+fn update_url_ok(url: &str) -> bool {
+    (url.starts_with("https://github.com/Ali120B/facekey/releases/download/")
+        || url.starts_with("https://objects.githubusercontent.com/"))
+        && url.ends_with(".AppImage")
 }
 
 /// The desktop user Howdy models belong to. The GUI runs unprivileged as the
@@ -1916,6 +1996,95 @@ impl qobject::HowdyBackend {
             .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
             .unwrap_or_else(|_| "unknown".into());
         self.as_mut().set_desktop_id(QString::from(&desktop));
+    }
+
+    /// Check GitHub for a newer release (threaded; result via poll_update).
+    /// Writes /tmp/facekey_update_check.json: {"tag":…,"url":…} or "NONE".
+    pub fn check_for_updates(mut self: Pin<&mut Self>) {
+        if test_run() {
+            self.as_mut().set_update_available(false);
+            self.as_mut().set_latest_version(QString::from(""));
+            let _ = std::fs::write("/tmp/facekey_update_check.json", "NONE");
+            return;
+        }
+        std::thread::spawn(|| {
+            let payload = match github_latest() {
+                Some((tag, url)) => format!("{{\"tag\":\"{}\",\"url\":\"{}\"}}", tag, url),
+                None => "NONE".to_string(),
+            };
+            let _ = std::fs::write("/tmp/facekey_update_check.json", payload);
+        });
+    }
+
+    /// Pick up a finished update check or download (GUI thread).
+    /// Returns true when something was consumed.
+    pub fn poll_update(mut self: Pin<&mut Self>) -> bool {
+        if let Ok(content) = std::fs::read_to_string("/tmp/facekey_update_check.json") {
+            let _ = std::fs::remove_file("/tmp/facekey_update_check.json");
+            let content = content.trim().to_string();
+            if content != "NONE" {
+                let tag = content
+                    .split("\"tag\":\"")
+                    .nth(1)
+                    .and_then(|s| s.split('"').next())
+                    .unwrap_or("")
+                    .to_string();
+                if !tag.is_empty() && version_newer(env!("CARGO_PKG_VERSION"), &tag) {
+                    self.as_mut().set_latest_version(QString::from(&tag));
+                    self.as_mut().set_update_available(true);
+                    self.as_mut().set_status_message(QString::from(&format!(
+                        "Update available: {} (see header)",
+                        tag
+                    )));
+                }
+            }
+            return true;
+        }
+        if let Ok(msg) = std::fs::read_to_string("/tmp/facekey_update_dl.txt") {
+            let _ = std::fs::remove_file("/tmp/facekey_update_dl.txt");
+            self.as_mut().set_status_message(QString::from(&msg));
+            return true;
+        }
+        false
+    }
+
+    /// Download the latest AppImage into ~/Downloads (threaded).
+    /// The URL is re-validated (github.com/Ali120B/facekey/releases only)
+    /// before curl ever sees it.
+    pub fn download_update(mut self: Pin<&mut Self>) {
+        if test_run() {
+            self.as_mut().set_status_message(QString::from(
+                "Update downloaded (test mode)",
+            ));
+            return;
+        }
+        self.as_mut().set_status_message(QString::from(
+            "Downloading update — watch ~/Downloads…",
+        ));
+        std::thread::spawn(|| {
+            let msg = match github_latest() {
+                Some((tag, url)) if update_url_ok(&url) => {
+                    let name = url.rsplit('/').next().unwrap_or("facekey.AppImage");
+                    let dest = match std::env::var("HOME") {
+                        Ok(h) => format!("{}/Downloads/{}", h, name),
+                        Err(_) => format!("/tmp/{}", name),
+                    };
+                    match Command::new("curl")
+                        .args(["-L", "--max-time", "600", "-o", &dest, &url])
+                        .output()
+                    {
+                        Ok(o) if o.status.success() => {
+                            let _ = Command::new("chmod").args(["+x", &dest]).output();
+                            format!("Update {} downloaded — restart the app to use it", tag)
+                        }
+                        _ => "Update download failed — check network".to_string(),
+                    }
+                }
+                Some(_) => "Update URL failed validation — aborted".to_string(),
+                None => "Could not reach GitHub releases".to_string(),
+            };
+            let _ = std::fs::write("/tmp/facekey_update_dl.txt", msg);
+        });
     }
 
     /// List human login users (uid 1000–60000) and default face_user

@@ -43,6 +43,8 @@ ApplicationWindow {
     // for enroll/test, which need exclusive access)
     property bool previewOn: false
     property string camError: ""
+    // Update check/download in flight (see updatePoller)
+    property bool updateBusy: false
     // Flipped briefly around device changes / toggles so the preview
     // Loader destroys and recreates the Camera (see card below).
     property bool camRestart: false
@@ -76,6 +78,8 @@ ApplicationWindow {
             backend.load_tuning()
             backend.load_auth_order()
             backend.list_login_users()
+            backend.check_for_updates()
+            window.updateBusy = true
             backend.probe_cameras()
             // First run (or broken setup) → guided wizard; it covers the
             // old standalone camera dialog, enroll and PAM wiring.
@@ -131,6 +135,18 @@ ApplicationWindow {
         id: refreshTimer
         interval: 400
         onTriggered: backend.refresh_models()
+    }
+
+    // Picks up finished update checks/downloads (result files)
+    Timer {
+        id: updatePoller
+        interval: 2000
+        running: window.updateBusy
+        repeat: true
+        onTriggered: {
+            if (backend.poll_update())
+                window.updateBusy = false
+        }
     }
 
     // ── Polkit disclaimer ───────────────────────────────────────────────────
@@ -419,6 +435,16 @@ ApplicationWindow {
             }
             Item { Layout.fillWidth: true }
             Label { text: "v" + backend.app_version; font.pixelSize: 12; color: dim }
+            UiButton {
+                visible: backend.update_available
+                text: "⇩ " + backend.latest_version
+                kind: "accent"
+                font.pixelSize: 12
+                onClicked: {
+                    backend.download_update()
+                    window.updateBusy = true
+                }
+            }
             UiButton {
                 text: "Health"
                 kind: "ghost"
