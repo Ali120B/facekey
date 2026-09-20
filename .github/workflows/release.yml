@@ -80,8 +80,11 @@ jobs:
         # The Qt plugin ships the wayland *platform* plugins but not the
         # client integrations Qt needs for EGL contexts on Wayland. Without
         # them there is no GL context, RHI fails, and the app aborts.
-        # Missing lib deps are chased via ldd (only Qt/Wayland/ffi libs —
-        # never system libc-class libs) and rpath-fixed like siblings.
+        # Missing lib deps are chased via ldd — Qt's own Wayland libs
+        # ONLY. System libwayland/libffi must come from the host: bundling
+        # Ubuntu's older copies shadows the host's and breaks host Mesa
+        # ("undefined symbol: wl_display_create_queue_with_name").
+        # Never bundle system libc-class libs either.
         run: |
           QTP="$(qmake6 -query QT_INSTALL_PLUGINS)"
           echo "Qt plugins dir: $QTP"
@@ -94,7 +97,7 @@ jobs:
             for dep in $(ldd "$so" | grep "=> /" | awk '{print $3}'); do
               base="$(basename "$dep")"
               case "$base" in
-                libQt6Wayland*|libwayland*|libffi.so.*)
+                libQt6Wayland*)
                   if [ ! -e "AppDir/usr/lib/$base" ]; then
                     echo "bundling dep: $base"
                     cp -L "$dep" AppDir/usr/lib/
@@ -103,7 +106,7 @@ jobs:
               esac
             done
           done
-          for f in AppDir/usr/plugins/wayland-*/lib*.so AppDir/usr/plugins/egldeviceintegrations/lib*.so AppDir/usr/lib/libQt6Wayland* AppDir/usr/lib/libwayland* AppDir/usr/lib/libffi.so.*; do
+          for f in AppDir/usr/plugins/wayland-*/lib*.so AppDir/usr/plugins/egldeviceintegrations/lib*.so AppDir/usr/lib/libQt6Wayland*; do
             [ -e "$f" ] || continue
             patchelf --set-rpath '$ORIGIN/../../lib:$ORIGIN' "$f" 2>/dev/null || patchelf --set-rpath '$ORIGIN' "$f"
           done
